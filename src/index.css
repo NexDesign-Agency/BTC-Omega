@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  
+  --color-trading-bg: #05070a;
+  --color-trading-panel: #0d1117;
+  --color-trading-border: #1f2937;
+  --color-bull: #00ff88;
+  --color-bear: #ff4466;
+  --color-accent: #3b82f6;
+  --color-warning: #f59e0b;
+}
+
+@layer base {
+  body {
+    @apply bg-trading-bg text-slate-300 font-sans antialiased overflow-hidden;
+  }
+}
+
+.glow-bull {
+  box-shadow: 0 0 15px rgba(0, 255, 136, 0.1);
+}
+
+.glow-bear {
+  box-shadow: 0 0 15px rgba(255, 68, 102, 0.1);
+}
+
+.markdown-body {
+  @apply space-y-2 text-xs leading-relaxed;
+}
+
+.markdown-body p {
+  @apply mb-1;
+}
+
+.markdown-body strong {
+  @apply text-white font-semibold;
+}
+
+/* Custom scrollbar for technical look */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-800 rounded-full hover:bg-slate-700 transition-colors;
+}
+
+/* TradingView Widget Overrides */
+.view-container iframe {
+  @apply rounded-lg opacity-90 grayscale-[20%] contrast-[110%];
+}
+
+@keyframes spin-slow {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes bounce-slow {
+  0%, 100% { transform: translateY(-5%); }
+  50% { transform: translateY(5%); }
+}
+
+.animate-spin-slow {
+  animation: spin-slow 20s linear infinite;
+}
+
+.animate-bounce-slow {
+  animation: bounce-slow 4s ease-in-out infinite;
+}
+
+.animate-bounce-slower {
+  animation: bounce-slow 6s ease-in-out infinite;
+}
+
+.text-glow {
+  text-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
+}
