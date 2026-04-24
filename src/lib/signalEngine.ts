@@ -39,13 +39,45 @@ function calcATR(klines: any[], currentPrice: number, period = 14): number {
   return trs.reduce((a, b) => a + b, 0) / period;
 }
 
-const TIER_CFG: Record<number, { sl: number; tp1: number; tp2: number; conf: number }> = {
-  1: { sl: 2.0, tp1: 3.0, tp2: 5.0, conf: 88 },
-  2: { sl: 1.5, tp1: 2.0, tp2: 3.5, conf: 75 },
-  3: { sl: 1.0, tp1: 2.0, tp2: 3.0, conf: 58 },
-  4: { sl: 0.7, tp1: 1.0, tp2: 1.5, conf: 45 },
-  5: { sl: 0.5, tp1: 0.8, tp2: 1.2, conf: 35 },
+const TIER_CFG: Record<number, { sl: number; tp1: number; tp2: number; baseConf: number }> = {
+  1: { sl: 2.0, tp1: 3.0, tp2: 5.0, baseConf: 78 }, // FIX: turun dari 88 → 78, masih bisa dikurangi oleh penalti
+  2: { sl: 1.5, tp1: 2.0, tp2: 3.5, baseConf: 65 },
+  3: { sl: 1.0, tp1: 2.0, tp2: 3.0, baseConf: 52 },
+  4: { sl: 0.7, tp1: 1.0, tp2: 1.5, baseConf: 40 },
+  5: { sl: 0.5, tp1: 0.8, tp2: 1.2, baseConf: 30 },
 };
+
+// FIX: Hitung confidence secara dinamis, bukan hardcode
+// Penalti diberikan berdasarkan kondisi pasar yang bertentangan
+function calcDynamicConfidence(baseConf: number, timeframes: TfData[], type: "BUY" | "SELL", avgRsi: number): number {
+  let conf = baseConf;
+  const h4 = timeframes.find(t => t.timeframe === 'H4');
+  const h1 = timeframes.find(t => t.timeframe === 'H1');
+  const m15 = timeframes.find(t => t.timeframe === 'M15');
+
+  // Penalti: ada BOS berlawanan di TF manapun
+  if (type === "BUY") {
+    if (h4?.structure === "BOS DOWN (LL)") conf -= 25; // BOS DOWN di H4 = penalti besar
+    if (h1?.structure === "BOS DOWN (LL)") conf -= 15;
+    if (m15?.structure === "BOS DOWN (LL)") conf -= 10;
+    if (avgRsi > 65) conf -= 10; // RSI tinggi saat BUY = risiko tinggi
+    if (avgRsi > 70) conf -= 10;
+  } else {
+    if (h4?.structure === "BOS UP (HH)") conf -= 25;
+    if (h1?.structure === "BOS UP (HH)") conf -= 15;
+    if (m15?.structure === "BOS UP (HH)") conf -= 10;
+    if (avgRsi < 35) conf -= 10;
+    if (avgRsi < 30) conf -= 10;
+  }
+
+  // Bonus: struktur searah semua TF
+  const allStructBull = [h4, h1, m15].every(t => t?.structure === "BOS UP (HH)");
+  const allStructBear = [h4, h1, m15].every(t => t?.structure === "BOS DOWN (LL)");
+  if (type === "BUY" && allStructBull) conf += 8;
+  if (type === "SELL" && allStructBear) conf += 8;
+
+  return Math.max(10, Math.min(95, conf)); // clamp 10-95%
+}
 
 function buildSuggestion(
   type: "BUY" | "SELL",
@@ -55,9 +87,11 @@ function buildSuggestion(
   reasoning: string,
   currentPrice: number,
   atr: number,
+  timeframes: TfData[],
+  avgRsi: number,
   waitPullback = false
 ): SignalResult {
-  const cfg = TIER_CFG[tier] || { sl: 1, tp1: 1.5, tp2: 2.5, conf: 40 };
+  const cfg = TIER_CFG[tier] || { sl: 1, tp1: 1.5, tp2: 2.5, baseConf: 35 };
   const isBuy = type === "BUY";
   const entryOffset = atr * (waitPullback ? 0.5 : 0.15);
   const entryZone = isBuy ? currentPrice - entryOffset : currentPrice + entryOffset;
@@ -65,7 +99,9 @@ function buildSuggestion(
   const tp1 = isBuy ? (entryZone + atr * cfg.tp1).toFixed(1) : (entryZone - atr * cfg.tp1).toFixed(1);
   const tp2 = isBuy ? (entryZone + atr * cfg.tp2).toFixed(1) : (entryZone - atr * cfg.tp2).toFixed(1);
   const rr  = `1:${(cfg.tp1 / cfg.sl).toFixed(1)}`;
-  return { type, tier, label, note, reasoning, confidence: cfg.conf, zone: entryZone.toFixed(1), sl, tp1, tp2, rr, isSkip: false, isAdvice: false };
+  // FIX: Gunakan dynamic confidence, bukan hardcode
+  const confidence = calcDynamicConfidence(cfg.baseConf, timeframes, type, avgRsi);
+  return { type, tier, label, note, reasoning, confidence, zone: entryZone.toFixed(1), sl, tp1, tp2, rr, isSkip: false, isAdvice: false };
 }
 
 function buildSkip(reason: string, allLow: boolean): SignalResult {
@@ -137,33 +173,37 @@ export function computeSignals(timeframes: TfData[], currentPrice: number, h1Raw
   const h4S = !h4B && !h4R;
   const avgRsi = (h1.rsi + m15.rsi) / 2;
 
+  // Shorthand helper — pass timeframes & avgRsi ke semua buildSuggestion call
+  const bs = (type: "BUY"|"SELL", tier: number, label: string, note: string, reasoning: string, wait=false) =>
+    buildSuggestion(type, tier, label, note, reasoning, currentPrice, atr, timeframes, avgRsi, wait);
+
   // PRIMARY
   if (h4B && h1B && m15B && m5B && avgRsi < 72)
-    suggestions.push(buildSuggestion("BUY", 1, "BUY SETUP", "4/4 TF align. Setup terkuat, bisa entry sekarang.", "TIER 1 - H4+H1+M15+M5 Bullish. RSI avg:" + avgRsi.toFixed(0) + ".", currentPrice, atr, false));
+    suggestions.push(bs("BUY", 1, "BUY SETUP", "4/4 TF align. Setup terkuat, bisa entry sekarang.", "TIER 1 - H4+H1+M15+M5 Bullish. RSI avg:" + avgRsi.toFixed(0) + "."));
   else if (h4B && [h1B, m15B, m5B].filter(Boolean).length >= 2 && avgRsi < 70)
-    suggestions.push(buildSuggestion("BUY", 2, "BUY SETUP", "3/4 TF align. Setup moderat, bisa entry.", "TIER 2 - H4+" + [h1B?'H1':'',m15B?'M15':'',m5B?'M5':''].filter(Boolean).join('+') + " Bullish. RSI avg:" + avgRsi.toFixed(0) + ".", currentPrice, atr, false));
+    suggestions.push(bs("BUY", 2, "BUY SETUP", "3/4 TF align. Setup moderat, bisa entry.", "TIER 2 - H4+" + [h1B?'H1':'',m15B?'M15':'',m5B?'M5':''].filter(Boolean).join('+') + " Bullish. RSI avg:" + avgRsi.toFixed(0) + "."));
   else if (h4B && h1B && avgRsi < 68)
-    suggestions.push(buildSuggestion("BUY", 3, "BUY SETUP", "Tunggu pullback ke entry zone. M15/M5 belum konfirmasi.", "TIER 3 - H4+H1 Bullish. M15/M5 belum ikut. RSI avg:" + avgRsi.toFixed(0) + ".", currentPrice, atr, true));
+    suggestions.push(bs("BUY", 3, "BUY SETUP", "Tunggu pullback ke entry zone. M15/M5 belum konfirmasi.", "TIER 3 - H4+H1 Bullish. M15/M5 belum ikut. RSI avg:" + avgRsi.toFixed(0) + ".", true));
   else if (h4R && h1R && m15R && m5R && avgRsi > 28)
-    suggestions.push(buildSuggestion("SELL", 1, "SELL SETUP", "4/4 TF align bearish. Setup terkuat, bisa entry sekarang.", "TIER 1 - H4+H1+M15+M5 Bearish. RSI avg:" + avgRsi.toFixed(0) + ".", currentPrice, atr, false));
+    suggestions.push(bs("SELL", 1, "SELL SETUP", "4/4 TF align bearish. Setup terkuat, bisa entry sekarang.", "TIER 1 - H4+H1+M15+M5 Bearish. RSI avg:" + avgRsi.toFixed(0) + "."));
   else if (h4R && [h1R, m15R, m5R].filter(Boolean).length >= 2 && avgRsi > 30)
-    suggestions.push(buildSuggestion("SELL", 2, "SELL SETUP", "3/4 TF align bearish. Setup moderat, bisa entry.", "TIER 2 - H4+" + [h1R?'H1':'',m15R?'M15':'',m5R?'M5':''].filter(Boolean).join('+') + " Bearish. RSI avg:" + avgRsi.toFixed(0) + ".", currentPrice, atr, false));
+    suggestions.push(bs("SELL", 2, "SELL SETUP", "3/4 TF align bearish. Setup moderat, bisa entry.", "TIER 2 - H4+" + [h1R?'H1':'',m15R?'M15':'',m5R?'M5':''].filter(Boolean).join('+') + " Bearish. RSI avg:" + avgRsi.toFixed(0) + "."));
   else if (h4R && h1R && avgRsi > 32)
-    suggestions.push(buildSuggestion("SELL", 3, "SELL SETUP", "Tunggu pullback ke entry zone. M15/M5 belum konfirmasi.", "TIER 3 - H4+H1 Bearish. M15/M5 belum ikut. RSI avg:" + avgRsi.toFixed(0) + ".", currentPrice, atr, true));
+    suggestions.push(bs("SELL", 3, "SELL SETUP", "Tunggu pullback ke entry zone. M15/M5 belum konfirmasi.", "TIER 3 - H4+H1 Bearish. M15/M5 belum ikut. RSI avg:" + avgRsi.toFixed(0) + ".", true));
 
   // SCALP REVERSAL (lebih sensitif)
   if (h4B && h1B && (m15R || m5R) && m15.rsi < 60 && m15.rsi > 30)
-    suggestions.push(buildSuggestion("SELL", 5, "SCALP REVERSAL", "Hold max 1-3 candle M15. Lot kecil! Exit cepat jika M15 balik naik.", "SCALP SELL - HTF Bullish tapi M15/M5 mulai bearish. RSI M15:" + m15.rsi + ". Counter-trend.", currentPrice, atr, false));
+    suggestions.push(bs("SELL", 5, "SCALP REVERSAL", "Hold max 1-3 candle M15. Lot kecil! Exit cepat jika M15 balik naik.", "SCALP SELL - HTF Bullish tapi M15/M5 mulai bearish. RSI M15:" + m15.rsi + ". Counter-trend."));
   else if (h4R && h1R && (m15B || m5B) && m15.rsi > 40 && m15.rsi < 68)
-    suggestions.push(buildSuggestion("BUY", 5, "SCALP REVERSAL", "Hold max 1-3 candle M15. Lot kecil! Exit cepat jika M15 balik turun.", "SCALP BUY - HTF Bearish tapi M15/M5 mulai bullish. RSI M15:" + m15.rsi + ". Counter-trend.", currentPrice, atr, false));
+    suggestions.push(bs("BUY", 5, "SCALP REVERSAL", "Hold max 1-3 candle M15. Lot kecil! Exit cepat jika M15 balik turun.", "SCALP BUY - HTF Bearish tapi M15/M5 mulai bullish. RSI M15:" + m15.rsi + ". Counter-trend."));
   else if (h4S && m15B && m5B && m15.rsi > 42)
-    suggestions.push(buildSuggestion("BUY", 4, "SCALP BUY", "Hold max 2-4 candle M15. H4 sideways, jangan hold swing.", "TIER 4 - H4 Sideways, M15+M5 Bullish. RSI M15:" + m15.rsi + ".", currentPrice, atr, false));
+    suggestions.push(bs("BUY", 4, "SCALP BUY", "Hold max 2-4 candle M15. H4 sideways, jangan hold swing.", "TIER 4 - H4 Sideways, M15+M5 Bullish. RSI M15:" + m15.rsi + "."));
   else if (h4S && m15R && m5R && m15.rsi < 58)
-    suggestions.push(buildSuggestion("SELL", 4, "SCALP SELL", "Hold max 2-4 candle M15. H4 sideways, jangan hold swing.", "TIER 4 - H4 Sideways, M15+M5 Bearish. RSI M15:" + m15.rsi + ".", currentPrice, atr, false));
+    suggestions.push(bs("SELL", 4, "SCALP SELL", "Hold max 2-4 candle M15. H4 sideways, jangan hold swing.", "TIER 4 - H4 Sideways, M15+M5 Bearish. RSI M15:" + m15.rsi + "."));
   else if (m15.rsi > 75)
-    suggestions.push(buildSuggestion("SELL", 5, "SCALP REVERSAL", "RSI M15 Overbought! Scalp sell cepat, target 1x ATR. Lot mini.", "RSI EXTREME - M15 RSI:" + m15.rsi + " overbought. Potensi koreksi jangka pendek.", currentPrice, atr, false));
+    suggestions.push(bs("SELL", 5, "SCALP REVERSAL", "RSI M15 Overbought! Scalp sell cepat, target 1x ATR. Lot mini.", "RSI EXTREME - M15 RSI:" + m15.rsi + " overbought. Potensi koreksi jangka pendek."));
   else if (m15.rsi < 25)
-    suggestions.push(buildSuggestion("BUY", 5, "SCALP REVERSAL", "RSI M15 Oversold! Scalp buy cepat, target 1x ATR. Lot mini.", "RSI EXTREME - M15 RSI:" + m15.rsi + " oversold. Potensi bounce jangka pendek.", currentPrice, atr, false));
+    suggestions.push(bs("BUY", 5, "SCALP REVERSAL", "RSI M15 Oversold! Scalp buy cepat, target 1x ATR. Lot mini.", "RSI EXTREME - M15 RSI:" + m15.rsi + " oversold. Potensi bounce jangka pendek."));
 
   // SKIP CARD
   const maxConf = suggestions.length > 0 ? Math.max(...suggestions.map(s => s.confidence)) : 0;

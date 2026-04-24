@@ -1,5 +1,5 @@
-// Hybrid EMA + ADX + RSI Trend Engine
-// Deterministic classification with anti flip-flop (2-candle confirmation)
+// Hybrid EMA + ADX + RSI + Structure Trend Engine
+// v2: BOS structure sekarang override EMA bias (fix false BUY saat BOS DOWN)
 
 export type TrendLabel = "STRONG BULL" | "BULLISH" | "SIDEWAYS" | "BEARISH" | "STRONG BEAR";
 
@@ -17,9 +17,6 @@ export interface TfConfig {
 }
 
 const TF_CONFIGS: Record<string, TfConfig> = {
-  // FIX: emaFlatPct dinaikkan — threshold lama terlalu sensitif sehingga
-  // BOS DOWN (reversal awal) terklasifikasi SIDEWAYS karena EMA belum diverge jauh.
-  // ADX threshold tetap — masih cukup untuk detect directional bias.
   H4:  { adxMinTrend: 15, emaFlatPct: 0.12 },
   H1:  { adxMinTrend: 17, emaFlatPct: 0.10 },
   M15: { adxMinTrend: 18, emaFlatPct: 0.08 },
@@ -59,7 +56,6 @@ export function calcRSI(closes: number[], period = 14): number {
 function calcADX(highs: number[], lows: number[], closes: number[], period = 14): number {
   const len = highs.length;
   if (len < period * 2 + 1) return 0;
-
   const tr: number[] = [];
   const plusDM: number[] = [];
   const minusDM: number[] = [];
@@ -71,7 +67,6 @@ function calcADX(highs: number[], lows: number[], closes: number[], period = 14)
     plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
     minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
   }
-
   const wilderSmooth = (arr: number[], p: number): number[] => {
     const out: number[] = [];
     let sum = 0;
@@ -82,11 +77,9 @@ function calcADX(highs: number[], lows: number[], closes: number[], period = 14)
     }
     return out;
   };
-
   const smoothTR = wilderSmooth(tr, period);
   const smoothPlusDM = wilderSmooth(plusDM, period);
   const smoothMinusDM = wilderSmooth(minusDM, period);
-
   const dx: number[] = [];
   for (let i = 0; i < smoothTR.length; i++) {
     const sTR = smoothTR[i];
@@ -96,9 +89,7 @@ function calcADX(highs: number[], lows: number[], closes: number[], period = 14)
     const diSum = pDI + mDI;
     dx.push(diSum === 0 ? 0 : (Math.abs(pDI - mDI) / diSum) * 100);
   }
-
   if (dx.length < period) return 0;
-
   let adx = 0;
   for (let i = 0; i < period; i++) adx += dx[i];
   adx /= period;
@@ -136,141 +127,109 @@ interface FlipFlopState {
   confirmed: TrendLabel;
   candidate: TrendLabel | null;
   candidateCount: number;
-  lastUpdated: number; // timestamp ms — FIX BUG 5: TTL reset
+  lastUpdated: number;
 }
 const flipFlopMap: Record<string, FlipFlopState> = {};
-// FIX: Perpanjang TTL ke 8 menit — poller 3s akan selalu refresh lastUpdated
-// sehingga TTL 30 menit tidak berguna. Ganti ke 8 menit agar lebih agresif reset.
-const FLIP_FLOP_TTL_MS = 8 * 60 * 1000; // 8 menit
+const FLIP_FLOP_TTL_MS = 8 * 60 * 1000;
 
-// FIX BUG 5 — Export reset function, bisa dipanggil dari runAnalysis()
 export function resetFlipFlopMap(): void {
-  for (const key in flipFlopMap) {
-    delete flipFlopMap[key];
-  }
+  for (const key in flipFlopMap) delete flipFlopMap[key];
 }
 
 function applyAntiFlipFlop(tfLabel: string, raw: TrendLabel): TrendLabel {
   const now = Date.now();
-
-  // FIX BUG 5 — TTL: kalau state sudah > 30 menit, hapus dan mulai fresh
   if (flipFlopMap[tfLabel] && (now - flipFlopMap[tfLabel].lastUpdated) > FLIP_FLOP_TTL_MS) {
     delete flipFlopMap[tfLabel];
   }
-
   if (!flipFlopMap[tfLabel]) {
     flipFlopMap[tfLabel] = { confirmed: raw, candidate: null, candidateCount: 0, lastUpdated: now };
     return raw;
   }
   const state = flipFlopMap[tfLabel];
   state.lastUpdated = now;
-
   if (raw === state.confirmed) {
-    state.candidate = null;
-    state.candidateCount = 0;
+    state.candidate = null; state.candidateCount = 0;
     return state.confirmed;
   }
-
   const sameDir = (a: TrendLabel, b: TrendLabel) =>
     (a.includes("BULL") && b.includes("BULL")) || (a.includes("BEAR") && b.includes("BEAR"));
-
   if (sameDir(raw, state.confirmed)) {
-    state.confirmed = raw;
-    state.candidate = null;
-    state.candidateCount = 0;
+    state.confirmed = raw; state.candidate = null; state.candidateCount = 0;
     return raw;
   }
-
   if (state.candidate === raw || (state.candidate && sameDir(state.candidate, raw))) {
     state.candidateCount++;
   } else {
-    state.candidate = raw;
-    state.candidateCount = 1;
+    state.candidate = raw; state.candidateCount = 1;
   }
-
-  // FIX: Anti-flipflop confirmation rules:
-  // - BULL → BEAR (or vice versa): 2 candles konfirmasi
-  // - Any → SIDEWAYS: 4 candles konfirmasi (sangat ketat, hindari false SIDEWAYS)
-  // - SIDEWAYS → Any directional: 2 candles konfirmasi
-  let requiredCount: number;
-  if (raw === "SIDEWAYS") {
-    requiredCount = 4; // Naik dari 3 ke 4 — SIDEWAYS harus benar-benar flat
-  } else if (state.confirmed === "SIDEWAYS") {
-    requiredCount = 2; // Keluar dari SIDEWAYS cukup 2 candle
-  } else {
-    requiredCount = 2; // BULL ↔ BEAR: 2 candle
-  }
+  // FIX v2: Kurangi threshold flip-flop untuk BOS signal — responsif lebih cepat
+  // SIDEWAYS → butuh 3 candle (bukan 4), BULL↔BEAR → 2 candle
+  const requiredCount = raw === "SIDEWAYS" ? 3 : state.confirmed === "SIDEWAYS" ? 2 : 2;
   if (state.candidateCount >= requiredCount) {
-    state.confirmed = raw;
-    state.candidate = null;
-    state.candidateCount = 0;
+    state.confirmed = raw; state.candidate = null; state.candidateCount = 0;
     return raw;
   }
-
   return state.confirmed;
 }
 
-// ── Main classification ──────────────────────────────────────────────
-// FIX: Rewrite guard logic — 3 stacked SIDEWAYS guards caused false SIDEWAYS
-// during BOS DOWN when price bounces between EMA21 and EMA50.
+// ── Main classification (v2) ──────────────────────────────────────────
+// FIX: BOS structure sekarang OVERRIDE EMA bias.
+// EMA adalah lagging indicator — BOS DOWN sudah terjadi duluan.
+// Kalau struktur bilang BOS DOWN, kita tidak kasih TIER 1 BUY.
 function classifyRaw(
   ema21: number, ema50: number, close: number,
-  adx: number, rsi: number, cfg: TfConfig
+  adx: number, rsi: number, cfg: TfConfig,
+  structure: string
 ): TrendLabel {
   const emaSpread = Math.abs(ema21 - ema50) / ema50 * 100;
-
-  // Guard 1: EMA truly flat → SIDEWAYS regardless of ADX
-  if (emaSpread < cfg.emaFlatPct) return "SIDEWAYS";
-
-  // Guard 2: ADX too weak AND no clear EMA direction → SIDEWAYS
-  // But if EMA is clearly diverged, ADX alone shouldn't block the signal
   const emaIsBull = ema21 > ema50;
   const emaIsBear = ema21 < ema50;
-  if (adx < cfg.adxMinTrend && !emaIsBull && !emaIsBear) return "SIDEWAYS";
 
-  // Classify by EMA direction (primary) + price position (secondary)
-  // FIX: Price between EMA21/EMA50 no longer forces SIDEWAYS —
-  // EMA alignment is enough to determine directional bias
+  // ── STRUCTURE OVERRIDE (prioritas tinggi) ──────────────────────────
+  // BOS DOWN saat EMA masih bullish tapi spread kecil → harga reversal duluan
+  if (structure === "BOS DOWN (LL)") {
+    if (emaIsBull && emaSpread < 0.25) return "BEARISH";  // EMA belum catch up, structure menang
+    if (emaIsBear) return adx >= 25 && rsi <= 45 ? "STRONG BEAR" : "BEARISH";
+    return "BULLISH"; // EMA bullish kuat (spread >0.25%) masih bisa tahan, tapi sinyal dilemahkan
+  }
+  if (structure === "BOS UP (HH)") {
+    if (emaIsBear && emaSpread < 0.25) return "BULLISH";
+    if (emaIsBull) return adx >= 25 && rsi >= 55 ? "STRONG BULL" : "BULLISH";
+    return "BEARISH";
+  }
+
+  // ── NORMAL CLASSIFICATION ──────────────────────────────────────────
+  if (emaSpread < cfg.emaFlatPct) return "SIDEWAYS";
+  if (adx < cfg.adxMinTrend && !emaIsBull && !emaIsBear) return "SIDEWAYS";
   if (emaIsBull) {
-    const strongBull = adx >= 25 && rsi >= 55 && close > ema21;
-    return strongBull ? "STRONG BULL" : "BULLISH";
+    return (adx >= 25 && rsi >= 55 && close > ema21) ? "STRONG BULL" : "BULLISH";
   }
   if (emaIsBear) {
-    const strongBear = adx >= 25 && rsi <= 45 && close < ema21;
-    return strongBear ? "STRONG BEAR" : "BEARISH";
+    return (adx >= 25 && rsi <= 45 && close < ema21) ? "STRONG BEAR" : "BEARISH";
   }
-
   return "SIDEWAYS";
 }
 
-// ── Public API: analyze klines for one timeframe ─────────────────────
-export function analyzeTimeframe(
-  klines: any[],
-  tfLabel: string
-): TrendResult {
+// ── Public API ────────────────────────────────────────────────────────
+export function analyzeTimeframe(klines: any[], tfLabel: string): TrendResult {
   const closed = klines.slice(0, -1);
-
   const closes = closed.map((k: any) => parseFloat(k[4]));
   const highs  = closed.map((k: any) => parseFloat(k[2]));
   const lows   = closed.map((k: any) => parseFloat(k[3]));
 
   const rsi = Math.round(calcRSI(closes, 14));
   const adx = Math.round(calcADX(highs, lows, closes, 14) * 10) / 10;
-  const ema21 = calcEMA(closes, 21);
-  const ema50 = calcEMA(closes, 50);
-  const lastEma21 = ema21[ema21.length - 1];
-  const lastEma50 = ema50[ema50.length - 1];
+  const ema21Arr = calcEMA(closes, 21);
+  const ema50Arr = calcEMA(closes, 50);
+  const lastEma21 = ema21Arr[ema21Arr.length - 1];
+  const lastEma50 = ema50Arr[ema50Arr.length - 1];
   const lastClose = closes[closes.length - 1];
+  const structure = getStructure(closes); // ← kalkulasi structure dulu
 
   const cfg = TF_CONFIGS[tfLabel] || TF_CONFIGS.M5;
-  const rawLabel = classifyRaw(lastEma21, lastEma50, lastClose, adx, rsi, cfg);
+  // FIX v2: Pass structure ke classifyRaw agar bisa override EMA bias
+  const rawLabel = classifyRaw(lastEma21, lastEma50, lastClose, adx, rsi, cfg, structure);
   const trend = applyAntiFlipFlop(tfLabel, rawLabel);
 
-  return {
-    trend,
-    rsi,
-    rsiState: rsiStateLabel(rsi),
-    structure: getStructure(closes),
-    adx,
-  };
+  return { trend, rsi, rsiState: rsiStateLabel(rsi), structure, adx };
 }
