@@ -3,7 +3,10 @@ import { motion, AnimatePresence } from "motion/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { analyzeTimeframe, resetFlipFlopMap } from "./lib/trendEngine";
-import { computeSignal } from "./lib/signalEngine";
+import { computeSignal, computeSignals, SignalResult } from "./lib/signalEngine";
+import { getAlertLevel, playAlertSound, speakSmartAlert } from "./lib/alertEngine";
+import { addSignalToHistory, loadHistory, calcWinRate } from "./lib/historyEngine";
+import HistoryPanel from "./components/HistoryPanel";
 import {
   BarChart3,
   TrendingUp,
@@ -19,7 +22,8 @@ import {
   Target,
   ShieldCheck,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Trophy
 } from "lucide-react";
 
 // TradingView widget script loader
@@ -102,6 +106,7 @@ interface MarketAnalysis {
     tp2: string;
     rr: string;
   };
+  suggestions: SignalResult[];
   reasoning: string;
   checkpoints: { label: string; checked: boolean }[];
 }
@@ -115,17 +120,28 @@ export default function App() {
   const [liveIndicators, setLiveIndicators] = useState<TimeframeData[] | null>(null);
   const [highlightTrigger, setHighlightTrigger] = useState(0);
   const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL">("SIGNAL");
+  const [showHistory, setShowHistory] = useState(false);
+  const [historyRefresh, setHistoryRefresh] = useState(0);
+  const [quickWinRate, setQuickWinRate] = useState<number | null>(null);
 
-  // Shared H1 klines for ATR — updated every fetch cycle
+  // Shared H1 klines for ATR â€” updated every fetch cycle
   const h1KlinesRef = useRef<any[]>([]);
   // Track last voiced signal to avoid repeated alerts
   const lastSignalKeyRef = useRef<string>("");
+  // FIX: Track last time flipFlop was auto-reset (every 10 min)
+  const lastFlipFlopResetRef = useRef<number>(Date.now());
 
   useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
 
   const enterTerminal = () => {
     setShowSplash(false);
-    speakMessage("Welcome to BTC USD Signal Omega. Terminal system is now active.");
+    speakSmartAlert("BUY", "0", "NONE", 0); // warm up audio ctx
+    window.speechSynthesis?.cancel();
+    window.speechSynthesis?.speak(Object.assign(new SpeechSynthesisUtterance("Welcome to BTC USD Signal Omega. Terminal system is now active."), { lang: 'en-US', rate: 0.85 }));
+    // Load quick win rate
+    const h = loadHistory();
+    const s = calcWinRate(h);
+    if (s.total > 0) setQuickWinRate(s.winRate);
   };
 
   // Auto-enter timer
@@ -147,26 +163,12 @@ export default function App() {
   // Remove the timeout so highlightTrigger stays until re-triggered
   // Or rather, we don't need a timeout anymore. It will just stay statically there.
 
-  const speakMessage = (text: string, rate: number = 0.85) => {
-    if (!window.speechSynthesis) return;
-    const msg = new SpeechSynthesisUtterance();
-    msg.lang = 'en-US';
-    msg.rate = rate; // slightly slower
-    msg.text = text;
-    window.speechSynthesis.speak(msg);
-  };
-
-  // Speak BUY/SELL voice alert — lives at component level so background poller can call it
-  const speakSignal = (type: string, zone?: string) => {
-    let spelledZone = zone;
-    if (zone) {
-      spelledZone = zone.split('').map(char => char === '.' ? ' point ' : char).join(', ');
-    }
-    if (type === 'BUY') {
-      speakMessage(`BUY signal detected. BUY at ${spelledZone}. Please check the terminal.`, 0.8);
-    } else if (type === 'SELL') {
-      speakMessage(`SELL signal detected. SELL at ${spelledZone}. Please check the terminal.`, 0.8);
-    }
+  // Smart alert — hanya fire untuk Tier 1/2 confidence >= 75
+  const fireSmartAlert = (type: "BUY" | "SELL", zone: string, confidence: number, tier: number) => {
+    const { shouldFire, level } = getAlertLevel(confidence, tier);
+    if (!shouldFire) return;
+    playAlertSound(level);
+    speakSmartAlert(type, zone, level, confidence);
   };
 
   // RSI, Structure, EMA, ADX calculations are in src/lib/trendEngine.ts
@@ -241,6 +243,7 @@ export default function App() {
 
       // Compute signal via engine (deterministic, tier-based)
       const sig = computeSignal(realTimeframes, currentPrice, h1RawKlines);
+      const allSuggestions = computeSignals(realTimeframes, currentPrice, h1RawKlines);
       const signalType = sig.type;
       const reasoningTxt = sig.reasoning;
 
@@ -257,6 +260,7 @@ export default function App() {
           tp2: sig.tp2,
           rr: sig.rr
         },
+        suggestions: allSuggestions,
         reasoning: reasoningTxt,
         checkpoints: [
           { label: "Data Binance Validated", checked: true },
@@ -267,11 +271,16 @@ export default function App() {
 
       setAnalysis(localData);
       setHighlightTrigger(prev => prev + 1);
-      // BUG 8 FIX: Round zone ke nearest 50 untuk key comparison — cegah voice spam saat harga choppy
+      // BUG 8 FIX: Round zone ke nearest 50 untuk key comparison â€” cegah voice spam saat harga choppy
       const sigKey = `${sig.type}-${Math.round(parseFloat(sig.zone) / 50) * 50}`;
       if ((sig.type === 'BUY' || sig.type === 'SELL') && sigKey !== lastSignalKeyRef.current) {
         lastSignalKeyRef.current = sigKey;
-        speakSignal(sig.type, sig.zone);
+        fireSmartAlert(sig.type as 'BUY'|'SELL', sig.zone, sig.confidence, sig.tier);
+        if (sig.confidence >= 75) {
+          addSignalToHistory({ type: sig.type as 'BUY'|'SELL', tier: sig.tier, confidence: sig.confidence, label: sig.label, zone: sig.zone, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, rr: sig.rr });
+          setHistoryRefresh(prev => prev + 1);
+          setQuickWinRate(calcWinRate(loadHistory()).winRate || null);
+        }
       }
     } catch (err: any) {
       console.error("General Analysis Error:", err);
@@ -312,6 +321,14 @@ export default function App() {
           fetchTF('4h', 'H4')
         ]);
 
+        // FIX: Auto-reset flipFlopMap setiap 10 menit â€” cegah SIDEWAYS lock permanen
+        const nowMs = Date.now();
+        if (nowMs - lastFlipFlopResetRef.current > 10 * 60 * 1000) {
+          resetFlipFlopMap();
+          lastFlipFlopResetRef.current = nowMs;
+          console.log('[BG Poller] flipFlopMap auto-reset @', new Date().toLocaleTimeString());
+        }
+
         const tfOrder = ['H4', 'H1', 'M15', 'M5'];
         realTimeframes.sort((a, b) => tfOrder.indexOf(a.timeframe) - tfOrder.indexOf(b.timeframe));
 
@@ -320,7 +337,8 @@ export default function App() {
         // Auto-recalculate signal every 3s using latest TF data + live price
         if (newPrice && realTimeframes.length === 4) {
           const autoSig = computeSignal(realTimeframes, newPrice, h1KlinesRef.current);
-          // BUG 8 FIX: Round zone ke nearest 50 — cegah voice spam
+          const autoSuggestions = computeSignals(realTimeframes, newPrice, h1KlinesRef.current);
+          // BUG 8 FIX: Round zone ke nearest 50 â€” cegah voice spam
           const sigKey = `${autoSig.type}-${Math.round(parseFloat(autoSig.zone) / 50) * 50}`;
           setAnalysis(prev => {
             if (!prev) return prev;
@@ -338,13 +356,18 @@ export default function App() {
                 tp2: autoSig.tp2,
                 rr: autoSig.rr
               },
+              suggestions: autoSuggestions,
               reasoning: autoSig.reasoning,
             };
           });
           // Voice alert only on new actionable signal
           if ((autoSig.type === 'BUY' || autoSig.type === 'SELL') && sigKey !== lastSignalKeyRef.current) {
             lastSignalKeyRef.current = sigKey;
-            speakSignal(autoSig.type, autoSig.zone);
+            fireSmartAlert(autoSig.type as 'BUY'|'SELL', autoSig.zone, autoSig.confidence, autoSig.tier);
+            if (autoSig.confidence >= 75) {
+              addSignalToHistory({ type: autoSig.type as 'BUY'|'SELL', tier: autoSig.tier, confidence: autoSig.confidence, label: autoSig.label, zone: autoSig.zone, sl: autoSig.sl, tp1: autoSig.tp1, tp2: autoSig.tp2, rr: autoSig.rr });
+              setHistoryRefresh(prev => prev + 1);
+            }
           }
         } else if (newPrice) {
           setAnalysis(prev => prev ? { ...prev, price: newPrice } : null);
@@ -378,14 +401,14 @@ export default function App() {
           <div className="flex items-center gap-3 md:gap-4 mb-20 md:mb-24 animate-in fade-in slide-in-from-top-10 duration-700">
             <div className="relative w-10 h-10 md:w-14 md:h-14 bg-bull/10 rounded-xl flex items-center justify-center border border-bull/30">
               <div className="relative text-bull border-2 md:border-4 border-bull rounded-full p-1 flex items-center justify-center w-7 h-7 md:w-10 md:h-10">
-                <span className="text-sm md:text-xl font-black italic">Ω</span>
+                <span className="text-sm md:text-xl font-black italic">Î©</span>
               </div>
             </div>
             <div>
               <h2 className="text-[10px] md:text-lg font-black tracking-[0.2em] md:tracking-[0.3em] text-white/90 italic uppercase">BTCUSD <span className="text-bull">SIGNAL OMEGA</span></h2>
               <div className="flex items-center gap-2">
                 <span className="w-1 h-1 md:w-1.5 md:h-1.5 rounded-full bg-bull animate-pulse" />
-                <span className="text-[7px] md:text-[10px] font-bold text-bull/60 tracking-widest uppercase">Live Scanning • Binance</span>
+                <span className="text-[7px] md:text-[10px] font-bold text-bull/60 tracking-widest uppercase">Live Scanning â€¢ Binance</span>
               </div>
             </div>
           </div>
@@ -447,7 +470,7 @@ export default function App() {
                 </div>
 
                 <div className="absolute inset-0 flex items-center justify-center text-bull/10 italic font-black text-[25rem] pointer-events-none select-none">
-                  Ω
+                  Î©
                 </div>
 
                 <div className="absolute inset-0 flex items-center justify-center">
@@ -498,7 +521,7 @@ export default function App() {
                 <span className="text-[8px] md:text-[9px] font-black text-bull">LIVE SCANNING</span>
               </div>
               <span className="hidden sm:inline text-[10px] font-mono text-slate-500">/</span >
-              <span className="hidden sm:inline text-[10px] font-mono text-slate-500 uppercase">BTCUSDT • BINANCE</span>
+              <span className="hidden sm:inline text-[10px] font-mono text-slate-500 uppercase">BTCUSDT â€¢ BINANCE</span>
             </div>
           </div>
         </div>
@@ -518,6 +541,19 @@ export default function App() {
             {loading ? <RefreshCw size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <Zap size={12} className="md:w-3.5 md:h-3.5" />}
             <span className="hidden sm:inline">{loading ? "SCANNING..." : "SCAN MARKET"}</span>
             <span className="inline sm:hidden">{loading ? "SCAN" : "SCAN"}</span>
+          </button>
+          <button
+            onClick={() => setShowHistory(true)}
+            className="relative flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 border border-trading-border rounded-md text-[10px] font-black text-slate-400 hover:text-white transition-all"
+            title="Signal History & Win Rate"
+          >
+            <Trophy size={12} className="text-warning" />
+            <span className="hidden sm:inline">HISTORY</span>
+            {quickWinRate !== null && (
+              <span className="absolute -top-1 -right-1 text-[8px] font-black bg-bull text-black rounded-full px-1 leading-4">
+                {quickWinRate}%
+              </span>
+            )}
           </button>
         </div>
       </header>
@@ -572,39 +608,71 @@ export default function App() {
               {/* Visual Target Lock Highlight Overlay (TV-Style Horizontal Ray) */}
               <AnimatePresence>
                 {analysis?.signal && (
-                  <motion.div
-                    key={highlightTrigger} // Use highlight trigger here just to fire the re-entry animation when updated
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ duration: 0.3 }}
-                    className="absolute left-0 w-full top-[30%] z-[60] flex items-center pointer-events-none drop-shadow-md"
-                  >
-                    {/* Text Label on the Left */}
-                    <div className="pl-4 pr-3 text-[10px] md:text-xs uppercase font-bold tracking-widest drop-shadow-lg whitespace-nowrap bg-trading-bg/50 backdrop-blur-sm"
-                      style={{ color: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}>
-                      {analysis.signal.type} ZONE
-                    </div>
-
-                    {/* Connecting Horizontal Line (Dotted) */}
-                    <div className="flex-1 h-0 border-b-2 border-dotted opacity-60"
-                      style={{ borderColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }} />
-
-                    {/* True TV Style Tag Polygon on the Right Edge */}
-                    <div className="flex items-center">
-                      {/* Arrow Pointing Left */}
-                      <div
-                        className="w-0 h-0 border-y-[12px] border-y-transparent border-r-[8px]"
-                        style={{ borderRightColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}
-                      />
-                      {/* Ticker Tag Body (Exactly matching TV dimensions) */}
-                      <div
-                        className="text-white font-mono text-[11px] font-semibold h-[24px] px-1.5 flex items-center justify-center rounded-sm rounded-l-none"
-                        style={{ backgroundColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}
-                      >
-                        {analysis.signal.zone}
+                  <>
+                    {/* ── PRIMARY: BUY / SELL ZONE line ─────────────────── */}
+                    <motion.div
+                      key={highlightTrigger}
+                      initial={{ opacity: 0 }}
+                      animate={{ opacity: 1 }}
+                      transition={{ duration: 0.3 }}
+                      className="absolute left-0 w-full top-[30%] z-[60] flex items-center pointer-events-none drop-shadow-md"
+                    >
+                      <div className="pl-4 pr-3 text-[10px] md:text-xs uppercase font-bold tracking-widest drop-shadow-lg whitespace-nowrap bg-trading-bg/50 backdrop-blur-sm"
+                        style={{ color: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}>
+                        {analysis.signal.type} ZONE
                       </div>
-                    </div>
-                  </motion.div>
+                      <div className="flex-1 h-0 border-b-2 border-dotted opacity-60"
+                        style={{ borderColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }} />
+                      <div className="flex items-center">
+                        <div
+                          className="w-0 h-0 border-y-[12px] border-y-transparent border-r-[8px]"
+                          style={{ borderRightColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}
+                        />
+                        <div
+                          className="text-white font-mono text-[11px] font-semibold h-[24px] px-1.5 flex items-center justify-center rounded-sm rounded-l-none"
+                          style={{ backgroundColor: analysis.signal.type === 'SELL' ? '#ff4466' : analysis.signal.type === 'BUY' ? '#00ff88' : '#eab308' }}
+                        >
+                          {analysis.signal.zone}
+                        </div>
+                      </div>
+                    </motion.div>
+
+                    {/* ── SCALP ZONE line (kuning) ───────────────────────── */}
+                    {(() => {
+                      const scalp = (analysis.suggestions || []).find(
+                        s => !s.isSkip && !s.isAdvice && s.label.includes('SCALP') && s.zone !== '---'
+                      );
+                      if (!scalp) return null;
+                      return (
+                        <motion.div
+                          key={`scalp-${highlightTrigger}`}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          transition={{ duration: 0.3, delay: 0.1 }}
+                          className="absolute left-0 w-full top-[48%] z-[60] flex items-center pointer-events-none drop-shadow-md"
+                        >
+                          <div className="pl-4 pr-3 text-[10px] md:text-xs uppercase font-bold tracking-widest drop-shadow-lg whitespace-nowrap bg-trading-bg/50 backdrop-blur-sm"
+                            style={{ color: '#eab308' }}>
+                            SCALP ZONE
+                          </div>
+                          <div className="flex-1 h-0 border-b-2 border-dashed opacity-60"
+                            style={{ borderColor: '#eab308' }} />
+                          <div className="flex items-center">
+                            <div
+                              className="w-0 h-0 border-y-[12px] border-y-transparent border-r-[8px]"
+                              style={{ borderRightColor: '#eab308' }}
+                            />
+                            <div
+                              className="text-black font-mono text-[11px] font-semibold h-[24px] px-1.5 flex items-center justify-center rounded-sm rounded-l-none"
+                              style={{ backgroundColor: '#eab308' }}
+                            >
+                              {scalp.zone}
+                            </div>
+                          </div>
+                        </motion.div>
+                      );
+                    })()}
+                  </>
                 )}
               </AnimatePresence>
             </div>
@@ -616,98 +684,104 @@ export default function App() {
               lg:flex lg:col-span-4 flex-col bg-trading-panel overflow-y-auto no-scrollbar h-full w-full pb-20 lg:pb-0
             `}>
             {/* Signal Header */}
-            <div className="p-6 border-b border-trading-border bg-gradient-to-br from-trading-panel to-trading-bg flex-shrink-0">
-              <h2 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4">AI ENTRY SUGGESTION</h2>
-              <div className="flex justify-between items-center mb-6">
-                <div>
-                  <p className={`text-5xl font-black italic tracking-tighter ${!analysis?.signal ? 'text-slate-500' : analysis.signal.type === 'WAIT' ? 'text-warning' : analysis.signal.type === 'BUY' ? 'text-bull' : 'text-bear'}`}>
-                    {analysis?.signal?.type || "SCANNING..."}
-                  </p>
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-widest mt-1">Confidence Score: <span className="text-white">{analysis?.signal?.type !== 'WAIT' ? `${analysis?.signal?.confidence ?? 0}%` : 'N/A'}</span></p>
-                  {analysis?.signal?.tier && analysis?.signal?.tier > 0 ? (
-                    <p className="text-[10px] font-bold tracking-widest uppercase opacity-60 mt-1">
-                      {({
-                        1: "⚡ TIER 1 — FULL MOMENTUM",
-                        2: "✅ TIER 2 — MODERAT",
-                        3: "⚠️ TIER 3 — SCALP KETAT",
-                        4: "🔶 TIER 4 — SCALP H4 SIDEWAYS",
-                        5: "🔴 TIER 5 — COUNTER-TREND"
-                      } as Record<number, string>)[analysis.signal.tier] ?? `TIER ${analysis.signal.tier}`}
-                    </p>
-                  ) : null}
-                </div>
-                {analysis && analysis.signal && (
-                  <div className="text-right">
-                    <div className="px-3 py-1 bg-white/5 border border-white/10 rounded-md">
-                      <p className="text-[10px] uppercase tracking-widest font-bold opacity-40">R:R RATIO</p>
-                      <p className="text-xl font-mono text-white font-black">{analysis.signal.rr || "---"}</p>
-                    </div>
-                  </div>
-                )}
-              </div>
+            <div className="p-4 border-b border-trading-border bg-gradient-to-br from-trading-panel to-trading-bg flex-shrink-0">
+              <h2 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-3">AI ENTRY SUGGESTION</h2>
 
-              {/* Checkpoint Matrix */}
-              <div className="space-y-3 mb-6">
-                {(analysis?.checkpoints || [
-                  { label: "Price di zona S/R", checked: false },
-                  { label: "RSI Multi-TF Alignment", checked: false },
-                  { label: "Candlestick Confirmation", checked: false }
-                ]).map((c, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <div className={`w-3.5 h-3.5 rounded border transition-colors flex items-center justify-center ${c.checked ? 'bg-bull border-bull text-black' : 'border-slate-700'}`}>
-                      {c.checked && <Zap size={8} strokeWidth={4} />}
-                    </div>
-                    <span className={`text-[11px] font-bold tracking-tight ${c.checked ? 'text-white' : 'text-slate-500'}`}>{c.label}</span>
-                  </div>
-                ))}
-              </div>
+              {/* Multi-Suggestion Cards */}
+              <div className="space-y-3">
+                {(analysis?.suggestions || []).map((s, i) => {
+                  const isSkip = s.isSkip;
+                  const isBuy = s.type === "BUY";
+                  const isSell = s.type === "SELL";
+                  const color = isSkip ? "#64748b" : isBuy ? "#00ff88" : "#ff4466";
+                  const bgColor = isSkip ? "bg-slate-800/40" : isBuy ? "bg-bull/5" : "bg-bear/5";
+                  const borderColor = isSkip ? "border-slate-700" : isBuy ? "border-bull/30" : "border-bear/30";
 
-              {/* Price Levels Grid */}
-              <div className="grid grid-cols-2 gap-3">
-                <div className="p-3 bg-trading-bg border border-trading-border rounded">
-                  <p className="text-[10px] uppercase tracking-widest font-bold opacity-40 text-slate-500 mb-1">ENTRY ZONE</p>
-                  <p className="text-sm font-mono text-white">{analysis?.signal?.zone || "---"}</p>
-                </div>
-                <div className="p-3 bg-trading-bg border border-trading-border rounded">
-                  <p className="text-[10px] uppercase tracking-widest font-bold opacity-40 text-bear mb-1">STOP LOSS</p>
-                  <p className="text-sm font-mono text-bear font-bold">{analysis?.signal?.sl || "---"}</p>
-                </div>
-                <div className="p-3 bg-trading-bg border border-trading-border rounded">
-                  <p className={`text-[10px] uppercase tracking-widest font-bold opacity-40 mb-1 ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>TP 1 TARGET</p>
-                  <p className={`text-sm font-mono font-bold ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>{analysis?.signal?.tp1 || "---"}</p>
-                </div>
-                <div className="p-3 bg-trading-bg border border-trading-border rounded">
-                  <p className={`text-[10px] uppercase tracking-widest font-bold opacity-40 mb-1 ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>TP 2 TARGET</p>
-                  <p className={`text-sm font-mono font-black ${analysis?.signal?.type === 'SELL' ? 'text-bear' : 'text-bull'}`}>{analysis?.signal?.tp2 || "---"}</p>
-                </div>
+                  // ADVICE card render
+                  if (s.isAdvice) {
+                    return (
+                      <div key={i} className="rounded-lg border border-blue-500/30 bg-blue-500/5 p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs font-black tracking-widest text-blue-400">ADVICE</span>
+                        </div>
+                        <div className="space-y-1">
+                          {s.note.split("\\n").map((line, li) => (
+                            <p key={li} className="text-[10px] font-medium text-slate-300 leading-relaxed">{line}</p>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  }
+
+                  return (
+                    <div key={i} className={`rounded-lg border p-3 ${bgColor} ${borderColor}`}>
+                      {/* Card Header */}
+                      <div className="flex justify-between items-center mb-2">
+                        <span className="font-black text-sm tracking-tight" style={{ color }}>
+                          {s.label}
+                        </span>
+                        {!isSkip && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-[9px] font-bold uppercase tracking-widest text-slate-400">
+                              Conf:
+                            </span>
+                            <span className="text-sm font-black font-mono" style={{ color }}>
+                              {s.confidence}%
+                            </span>
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-white/5 border border-white/10 font-mono text-slate-400">
+                              RR {s.rr}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Price Levels - hanya untuk non-skip */}
+                      {!isSkip && (
+                        <div className="grid grid-cols-2 gap-1.5 mb-2">
+                          <div className="p-2 bg-trading-bg/80 rounded border border-trading-border">
+                            <p className="text-[8px] uppercase tracking-widest opacity-40 mb-0.5">Entry</p>
+                            <p className="text-xs font-mono text-white font-bold">{s.zone}</p>
+                          </div>
+                          <div className="p-2 bg-trading-bg/80 rounded border border-trading-border">
+                            <p className="text-[8px] uppercase tracking-widest text-bear opacity-70 mb-0.5">SL</p>
+                            <p className="text-xs font-mono text-bear font-bold">{s.sl}</p>
+                          </div>
+                          <div className="p-2 bg-trading-bg/80 rounded border border-trading-border">
+                            <p className="text-[8px] uppercase tracking-widest mb-0.5" style={{ color, opacity: 0.7 }}>TP1</p>
+                            <p className="text-xs font-mono font-bold" style={{ color }}>{s.tp1}</p>
+                          </div>
+                          <div className="p-2 bg-trading-bg/80 rounded border border-trading-border">
+                            <p className="text-[8px] uppercase tracking-widest mb-0.5" style={{ color, opacity: 0.7 }}>TP2</p>
+                            <p className="text-xs font-mono font-black" style={{ color }}>{s.tp2}</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Note */}
+                      <p className="text-[10px] font-bold leading-snug" style={{ color: isSkip ? "#94a3b8" : color, opacity: isSkip ? 1 : 0.85 }}>
+                        {s.note}
+                      </p>
+                    </div>
+                  );
+                })}
               </div>
             </div>
 
-            {/* Analysis Reason */}
-            <div className="p-6 flex-1">
-              {analysis?.signal?.type === "WAIT" && (
-                <div className="mb-3 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded text-yellow-400 text-[11px] font-bold">
-                  ⛔ TIDAK ADA SETUP VALID — JANGAN ENTRY
-                </div>
-              )}
-              {analysis?.signal?.type !== "WAIT" && analysis?.signal?.tier === 3 && (
-                <div className="mb-3 p-3 bg-orange-500/10 border border-orange-500/30 rounded text-orange-400 text-[11px] font-bold">
-                  ⚠️ TIER 3 — Setup lemah. Lot kecil, SL ketat, konfirmasi manual dulu di MT5.
-                </div>
-              )}
-              {analysis?.signal?.type !== "WAIT" && analysis?.signal?.tier === 4 && (
-                <div className="mb-3 p-3 bg-orange-600/10 border border-orange-600/40 rounded text-orange-300 text-[11px] font-bold">
-                  🔶 TIER 4 — SCALP ONLY. H4 sideways, momentum lemah. Lot kecil, SL sangat ketat. Jangan hold lama.
-                </div>
-              )}
-              {analysis?.signal?.type !== "WAIT" && analysis?.signal?.tier === 5 && (
-                <div className="mb-3 p-3 bg-red-500/10 border border-red-500/40 rounded text-red-400 text-[11px] font-bold">
-                  🔴 TIER 5 — COUNTER-TREND. Risiko tinggi. Lot MINIMAL (maks 10% dari normal). Hanya untuk scalper berpengalaman. Exit cepat jika M15 balik arah.
-                </div>
-              )}
-              <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-4 tracking-tighter">REASONING & BIAS</h3>
-              <div className="prose prose-invert prose-sm max-w-none text-slate-400 font-medium leading-relaxed">
-                <Markdown remarkPlugins={[remarkGfm]}>{analysis?.reasoning || "Tunggu hasil pemindaian..."}</Markdown>
+            {/* Reasoning per suggestion pertama */}
+            <div className="p-4 flex-1">
+              <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-40 mb-3">REASONING & BIAS</h3>
+              <div className="space-y-2">
+                {(analysis?.suggestions || []).filter(s => !s.isSkip).map((s, i) => (
+                  <div key={i} className="text-[11px] font-medium text-slate-400 leading-relaxed border-l-2 pl-3"
+                    style={{ borderColor: s.type === "BUY" ? "#00ff88" : "#ff4466" }}>
+                    {s.reasoning}
+                  </div>
+                ))}
+                {(!analysis?.suggestions || analysis.suggestions.filter(s => !s.isSkip).length === 0) && (
+                  <p className="text-slate-500 text-[11px]">
+                    {analysis?.suggestions?.find(s => s.isSkip)?.reasoning || "Tunggu hasil pemindaian..."}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -742,9 +816,19 @@ export default function App() {
             SYSTEM: ONLINE [24/7 SCANNING]
           </div>
           <div>VOLATILITY: 1.25%</div>
-          <div className="ml-auto">© 2026 ALPHAPULSE INTEL. LTD. • NOT FINANCIAL ADVICE</div>
+          <div className="ml-auto">Â© 2026 ALPHAPULSE INTEL. LTD. â€¢ NOT FINANCIAL ADVICE</div>
         </div>
       </footer>
+
+      {/* History Panel */}
+      <AnimatePresence>
+        {showHistory && (
+          <HistoryPanel
+            onClose={() => setShowHistory(false)}
+            refreshTrigger={historyRefresh}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

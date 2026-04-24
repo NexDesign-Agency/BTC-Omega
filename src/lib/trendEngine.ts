@@ -17,10 +17,13 @@ export interface TfConfig {
 }
 
 const TF_CONFIGS: Record<string, TfConfig> = {
-  H4:  { adxMinTrend: 20, emaFlatPct: 0.12 },
-  H1:  { adxMinTrend: 22, emaFlatPct: 0.10 },
-  M15: { adxMinTrend: 23, emaFlatPct: 0.08 },
-  M5:  { adxMinTrend: 25, emaFlatPct: 0.06 },
+  // FIX: emaFlatPct dinaikkan — threshold lama terlalu sensitif sehingga
+  // BOS DOWN (reversal awal) terklasifikasi SIDEWAYS karena EMA belum diverge jauh.
+  // ADX threshold tetap — masih cukup untuk detect directional bias.
+  H4:  { adxMinTrend: 15, emaFlatPct: 0.12 },
+  H1:  { adxMinTrend: 17, emaFlatPct: 0.10 },
+  M15: { adxMinTrend: 18, emaFlatPct: 0.08 },
+  M5:  { adxMinTrend: 20, emaFlatPct: 0.06 },
 };
 
 // ── EMA ──────────────────────────────────────────────────────────────
@@ -136,7 +139,9 @@ interface FlipFlopState {
   lastUpdated: number; // timestamp ms — FIX BUG 5: TTL reset
 }
 const flipFlopMap: Record<string, FlipFlopState> = {};
-const FLIP_FLOP_TTL_MS = 30 * 60 * 1000; // 30 menit
+// FIX: Perpanjang TTL ke 8 menit — poller 3s akan selalu refresh lastUpdated
+// sehingga TTL 30 menit tidak berguna. Ganti ke 8 menit agar lebih agresif reset.
+const FLIP_FLOP_TTL_MS = 8 * 60 * 1000; // 8 menit
 
 // FIX BUG 5 — Export reset function, bisa dipanggil dari runAnalysis()
 export function resetFlipFlopMap(): void {
@@ -183,7 +188,19 @@ function applyAntiFlipFlop(tfLabel: string, raw: TrendLabel): TrendLabel {
     state.candidateCount = 1;
   }
 
-  if (state.candidateCount >= 2) {
+  // FIX: Anti-flipflop confirmation rules:
+  // - BULL → BEAR (or vice versa): 2 candles konfirmasi
+  // - Any → SIDEWAYS: 4 candles konfirmasi (sangat ketat, hindari false SIDEWAYS)
+  // - SIDEWAYS → Any directional: 2 candles konfirmasi
+  let requiredCount: number;
+  if (raw === "SIDEWAYS") {
+    requiredCount = 4; // Naik dari 3 ke 4 — SIDEWAYS harus benar-benar flat
+  } else if (state.confirmed === "SIDEWAYS") {
+    requiredCount = 2; // Keluar dari SIDEWAYS cukup 2 candle
+  } else {
+    requiredCount = 2; // BULL ↔ BEAR: 2 candle
+  }
+  if (state.candidateCount >= requiredCount) {
     state.confirmed = raw;
     state.candidate = null;
     state.candidateCount = 0;
@@ -194,21 +211,36 @@ function applyAntiFlipFlop(tfLabel: string, raw: TrendLabel): TrendLabel {
 }
 
 // ── Main classification ──────────────────────────────────────────────
+// FIX: Rewrite guard logic — 3 stacked SIDEWAYS guards caused false SIDEWAYS
+// during BOS DOWN when price bounces between EMA21 and EMA50.
 function classifyRaw(
   ema21: number, ema50: number, close: number,
   adx: number, rsi: number, cfg: TfConfig
 ): TrendLabel {
-  if (adx < cfg.adxMinTrend) return "SIDEWAYS";
-
   const emaSpread = Math.abs(ema21 - ema50) / ema50 * 100;
+
+  // Guard 1: EMA truly flat → SIDEWAYS regardless of ADX
   if (emaSpread < cfg.emaFlatPct) return "SIDEWAYS";
 
-  const bull = ema21 > ema50 && close > ema21;
-  const bear = ema21 < ema50 && close < ema21;
-  if (!bull && !bear) return "SIDEWAYS";
+  // Guard 2: ADX too weak AND no clear EMA direction → SIDEWAYS
+  // But if EMA is clearly diverged, ADX alone shouldn't block the signal
+  const emaIsBull = ema21 > ema50;
+  const emaIsBear = ema21 < ema50;
+  if (adx < cfg.adxMinTrend && !emaIsBull && !emaIsBear) return "SIDEWAYS";
 
-  if (bull) return (adx >= 25 && rsi >= 55) ? "STRONG BULL" : "BULLISH";
-  return (adx >= 25 && rsi <= 45) ? "STRONG BEAR" : "BEARISH";
+  // Classify by EMA direction (primary) + price position (secondary)
+  // FIX: Price between EMA21/EMA50 no longer forces SIDEWAYS —
+  // EMA alignment is enough to determine directional bias
+  if (emaIsBull) {
+    const strongBull = adx >= 25 && rsi >= 55 && close > ema21;
+    return strongBull ? "STRONG BULL" : "BULLISH";
+  }
+  if (emaIsBear) {
+    const strongBear = adx >= 25 && rsi <= 45 && close < ema21;
+    return strongBear ? "STRONG BEAR" : "BEARISH";
+  }
+
+  return "SIDEWAYS";
 }
 
 // ── Public API: analyze klines for one timeframe ─────────────────────
