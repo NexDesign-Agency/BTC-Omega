@@ -1,6 +1,7 @@
 // alertEngine.ts — Smart Alert System for Omega BTC
-// Only fires on HIGH CONFIDENCE signals (Tier 1 & 2, confidence >= 75)
-// Plays a powerful, distinct audio alert designed to wake someone up
+// Only fires on HIGH CONFIDENCE signals (reads threshold from ENGINE_CONFIG)
+
+import { ENGINE_CONFIG } from '../constants';
 
 export type AlertLevel = "CRITICAL" | "HIGH" | "MODERATE" | "NONE";
 
@@ -12,16 +13,17 @@ export interface SmartAlert {
 
 // Determine alert level based on signal confidence & tier
 export function getAlertLevel(confidence: number, tier: number): SmartAlert {
-  if (tier === 1 && confidence >= 85) {
-    return { level: "CRITICAL", shouldFire: true, reason: `TIER 1 — Confidence ${confidence}% (4/4 TF align)` };
+  const threshold = ENGINE_CONFIG.minConfidenceForAlert; // default 75
+  if (tier === 1 && confidence >= threshold + 10) {
+    return { level: "CRITICAL", shouldFire: true, reason: `TIER 1 — Confidence ${confidence}% (≥${threshold + 10}%)` };
   }
-  if (tier <= 2 && confidence >= 75) {
-    return { level: "HIGH", shouldFire: true, reason: `TIER 2 — Confidence ${confidence}% (3/4 TF align)` };
+  if (tier <= 2 && confidence >= threshold) {
+    return { level: "HIGH", shouldFire: true, reason: `TIER ${tier} — Confidence ${confidence}% (≥${threshold}%)` };
   }
-  if (tier === 3 && confidence >= 58) {
+  if (tier === 3 && confidence >= threshold - 17) {
     return { level: "MODERATE", shouldFire: false, reason: `TIER 3 — Confidence ${confidence}% (terlalu rendah untuk alert)` };
   }
-  return { level: "NONE", shouldFire: false, reason: `Confidence ${confidence}% di bawah threshold alert (75%)` };
+  return { level: "NONE", shouldFire: false, reason: `Confidence ${confidence}% di bawah threshold alert (${threshold}%)` };
 }
 
 // Web Audio API — generate powerful alert sound

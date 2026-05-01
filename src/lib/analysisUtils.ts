@@ -185,8 +185,8 @@ export function analyzeTFDirection(klines: any[], currentPrice?: number): TFDire
   const closes = closed.map(k => parseFloat(k[4]));
   const price = currentPrice ?? closes[closes.length - 1];
 
-  const ema20 = calcEMA(closes.slice(-30), 20); // extra buffer for EMA warmup
-  const ema50 = calcEMA(closes.slice(-60), 50);
+  const ema20 = calcEMA(closes, 20); // pakai semua data untuk warmup akurat
+  const ema50 = calcEMA(closes, 50);
 
   // Direction
   let direction: TFDirection["direction"] = "SIDEWAYS";

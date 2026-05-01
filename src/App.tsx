@@ -106,6 +106,7 @@ export default function App() {
   const m15KlinesRef = useRef<any[]>([]);
   const m5KlinesRef = useRef<any[]>([]);
   const lastSignalKeyRef = useRef<string>("");
+  const alertReadyRef = useRef(false); // Cooldown: no alerts until 10s after app start
 
   useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
 
@@ -117,6 +118,8 @@ export default function App() {
     const h = loadHistory();
     const s = calcWinRate(h);
     if (s.total > 0) setQuickWinRate(s.winRate);
+    // Enable alerts after 10s cooldown
+    setTimeout(() => { alertReadyRef.current = true; }, 10000);
   };
 
   useEffect(() => {
@@ -130,6 +133,7 @@ export default function App() {
   }, [showSplash, countdown]);
 
   const fireSmartAlert = (type: "BUY" | "SELL", zone: string, confidence: number, tier: number) => {
+    if (!alertReadyRef.current) return; // Cooldown belum selesai
     const { shouldFire, level } = getAlertLevel(confidence, tier);
     if (!shouldFire) return;
     playAlertSound(level);

@@ -5,8 +5,7 @@
 import { analyzeMarketStructure } from './levelEngine';
 import {
   calculateATR, analyzeVolume, detectCandlePattern,
-  getSessionInfo, calculateConfluence,
-  type VolumeInfo, type CandlePattern, type SessionInfo, type ConfluenceResult
+  getSessionInfo, calculateConfluence
 } from './analysisUtils';
 import { ENGINE_CONFIG } from '../constants';
 
@@ -146,8 +145,14 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
         const slDist = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.breakout : currentPrice * 0.002;
         const entry = currentPrice;
         const sl = entry - slDist;
-        const tp1 = entry + slDist * 2;
-        const tp2 = entry + slDist * 4;
+
+        // Breakout TP: cari resistance di atas, fallback ke ATR
+        let tp1 = entry + slDist * 2, tp2 = entry + slDist * 4;
+        if (structure.levels && structure.levels.length > 0) {
+          const targets = structure.levels.filter(l => l.price > entry + slDist).sort((a, b) => a.price - b.price);
+          if (targets[0]) tp1 = targets[0].price;
+          if (targets[1]) tp2 = targets[1].price;
+        }
 
         const baseConf = 75;
         const { confidence, modNotes } = applyModifiers(baseConf, "BUY");
@@ -166,8 +171,14 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
         const slDist = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.breakout : currentPrice * 0.002;
         const entry = currentPrice;
         const sl = entry + slDist;
-        const tp1 = entry - slDist * 2;
-        const tp2 = entry - slDist * 4;
+
+        // Breakout TP: cari support di bawah, fallback ke ATR
+        let tp1 = entry - slDist * 2, tp2 = entry - slDist * 4;
+        if (structure.levels && structure.levels.length > 0) {
+          const targets = structure.levels.filter(l => l.price < entry - slDist).sort((a, b) => b.price - a.price);
+          if (targets[0]) tp1 = targets[0].price;
+          if (targets[1]) tp2 = targets[1].price;
+        }
 
         const baseConf = 75;
         const { confidence, modNotes } = applyModifiers(baseConf, "SELL");
@@ -308,14 +319,16 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       if (structure.levels && structure.levels.length > 1) {
         const otherLevels = structure.levels.filter(l => l.price !== exactEntry);
         if (type === "BUY") {
+          // BUY → TP di RESISTANCE/KEY ZONE di atas entry
           const targets = otherLevels
-            .filter(l => l.price > exactEntry + slDist * 0.5)
+            .filter(l => (l.type === "RESISTANCE" || l.type === "KEY ZONE") && l.price > exactEntry + slDist * 0.5)
             .sort((a, b) => a.price - b.price);
           tp1 = targets[0]?.price ?? fbTp1;
           tp2 = targets[1]?.price ?? fbTp2;
         } else {
+          // SELL → TP di SUPPORT/KEY ZONE di bawah entry
           const targets = otherLevels
-            .filter(l => l.price < exactEntry - slDist * 0.5)
+            .filter(l => (l.type === "SUPPORT" || l.type === "KEY ZONE") && l.price < exactEntry - slDist * 0.5)
             .sort((a, b) => b.price - a.price);
           tp1 = targets[0]?.price ?? fbTp1;
           tp2 = targets[1]?.price ?? fbTp2;
