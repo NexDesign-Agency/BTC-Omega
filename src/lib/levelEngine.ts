@@ -1,4 +1,5 @@
-// Level Engine v1.1 — Auto-detect S&R + Trendlines + Triangle/Wedge
+// Level Engine v1.2 — Auto-detect S&R + Trendlines + Triangle/Wedge
+// FIX: Lebih banyak level dikembalikan (slice(-3) bukan slice(-2)) agar tier 2/3 tidak selalu kosong
 // Metode: pivot high/low + linear regression for diagonals + compression check
 
 export interface KeyLevel {
@@ -40,7 +41,6 @@ export function findPivots(highs: number[], lows: number[], window = 5): { ph: {
 // ── Trendline Calculation (Garis Miring) ──────────────────────────────
 function calculateTrendline(pivots: {p:number, i:number}[], type: "RES" | "SUP", currentIndex: number): Trendline | null {
   if (pivots.length < 2) return null;
-  // Ambil 2 pivot terakhir untuk trendline terbaru
   const p2 = pivots[pivots.length - 1];
   const p1 = pivots[pivots.length - 2];
   
@@ -59,7 +59,8 @@ function calculateTrendline(pivots: {p:number, i:number}[], type: "RES" | "SUP",
 
 // ── Cluster nearby levels (Horizontal) ────────────────────────────────
 function clusterLevels(levels: number[], currentPrice: number): { price: number; strength: number }[] {
-  const threshold = currentPrice * 0.0015;
+  // FIX: threshold diperlebar sedikit agar level yang berdekatan tidak terlalu dipecah
+  const threshold = currentPrice * 0.002;
   const sorted = [...levels].sort((a, b) => a - b);
   const clusters: { price: number; strength: number }[] = [];
   for (const lvl of sorted) {
@@ -92,11 +93,24 @@ export function analyzeMarketStructure(klines: any[], currentPrice: number) {
   const supClusters = clusterLevels(pl.map(p => p.p), currentPrice);
   
   const levels: KeyLevel[] = [];
-  resClusters.filter(c => c.price > currentPrice).slice(-2).forEach(c => {
-    levels.push({ price: c.price, type: "RESISTANCE", strength: c.strength, label: `RES ${Math.round(c.price)}` });
+
+  // FIX BUG #1: Ambil 3 level (bukan 2) di atas dan di bawah harga
+  // agar tier 2 scalp punya lebih banyak peluang menemukan level dalam radius
+  resClusters.filter(c => c.price > currentPrice).slice(-3).forEach(c => {
+    levels.push({
+      price: c.price,
+      type: "RESISTANCE",
+      strength: Math.min(3, c.strength),
+      label: `RES ${Math.round(c.price)}`
+    });
   });
-  supClusters.filter(c => c.price < currentPrice).slice(0, 2).forEach(c => {
-    levels.push({ price: c.price, type: "SUPPORT", strength: c.strength, label: `SUP ${Math.round(c.price)}` });
+  supClusters.filter(c => c.price < currentPrice).slice(0, 3).forEach(c => {
+    levels.push({
+      price: c.price,
+      type: "SUPPORT",
+      strength: Math.min(3, c.strength),
+      label: `SUP ${Math.round(c.price)}`
+    });
   });
 
   // 2. Trendlines (Garis Miring)
@@ -116,10 +130,11 @@ export function analyzeMarketStructure(klines: any[], currentPrice: number) {
     else if (isUpperDown && !isLowerUp && upperLine.slope < lowerLine.slope) patternType = "WEDGE";
     else if (!isUpperDown && isLowerUp && upperLine.slope < lowerLine.slope) patternType = "WEDGE";
 
-    // Hitung compression (seberapa dekat ujung garis miring)
-    const currentSpread = upperLine.endPrice - lowerLine.endPrice;
-    const startSpread = upperLine.startPrice - lowerLine.startPrice;
-    compression = Math.max(0, Math.min(100, (1 - currentSpread / startSpread) * 100));
+    const currentSpread = Math.abs(upperLine.currentValue - lowerLine.currentValue);
+    const startSpread = Math.abs(upperLine.startPrice - lowerLine.startPrice);
+    if (startSpread > 0) {
+      compression = Math.max(0, Math.min(100, (1 - currentSpread / startSpread) * 100));
+    }
   }
 
   return {
@@ -146,4 +161,3 @@ export function getNearestSupport(levels: KeyLevel[]): KeyLevel | null {
 export function getNearestResistance(levels: KeyLevel[]): KeyLevel | null {
   return levels.find(l => l.type === "RESISTANCE") || null;
 }
-

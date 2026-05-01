@@ -161,7 +161,7 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
           type: "BUY", tier: 1,
           label: `EXPLOSIVE ${structure.pattern.type} BREAKOUT`,
           note: confidence >= 70 ? "Breakout Atas terkonfirmasi! Eksekusi Market." : "Breakout terdeteksi, tapi konfirmasi lemah. Hati-hati.",
-          reasoning: `Harga memotong diagonal ${Math.round(upper.currentValue)}. Compression ${structure.pattern.compressionPct.toFixed(0)}%. | ${modNotes.join(' | ')}`,
+          reasoning: `Harga memotong diagonal ${Math.round(upper.currentValue)} | Compression ${structure.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
           confidence, zone: entry.toFixed(1),
           sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
           rr: calcRR(entry, sl, tp2)
@@ -187,7 +187,7 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
           type: "SELL", tier: 1,
           label: `EXPLOSIVE ${structure.pattern.type} BREAKOUT`,
           note: confidence >= 70 ? "Breakout Bawah terkonfirmasi! Eksekusi Market." : "Breakout terdeteksi, konfirmasi lemah. Hati-hati.",
-          reasoning: `Harga memotong diagonal ${Math.round(lower.currentValue)}. Compression ${structure.pattern.compressionPct.toFixed(0)}%. | ${modNotes.join(' | ')}`,
+          reasoning: `Harga memotong diagonal ${Math.round(lower.currentValue)} | Compression ${structure.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
           confidence, zone: entry.toFixed(1),
           sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
           rr: calcRR(entry, sl, tp2)
@@ -266,7 +266,7 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       note: type === "BUY"
         ? "Ikut tren naik. Tunggu pullback ke area support untuk BUY."
         : "Ikut tren turun. Tunggu pullback ke area resistance untuk SELL.",
-      reasoning: `Tren: ${localTrend}. TP target: ${tpSource}. ATR H1: $${Math.round(atrH1)}. | ${modNotes.join(' | ')}`,
+      reasoning: `Tren: ${localTrend} | TP target: ${tpSource} | ATR H1: $${Math.round(atrH1)} | ${modNotes.join(' | ')}`,
       confidence, zone: entry.toFixed(1),
       sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
       rr: calcRR(entry, sl, tp2)
@@ -297,8 +297,9 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       if (localTrend === "DOWN" && type === "SELL") tier = 2;
       if (localTrend === "SIDEWAYS") tier = 2;
 
-      // BUG 2 FIX: Radius berbeda per tier — searah tren lebih lebar
-      const maxDist = tier === 2 ? 0.8 : 0.5;
+      // FIX: Radius diperlebar agar tier 2 tidak selalu kosong
+      // Tier 2 (searah tren): 1.5%, Tier 3 (counter): 0.8%
+      const maxDist = tier === 2 ? 1.5 : 0.8;
       if (distPct > maxDist) continue;
 
       // Skip jika tier ini sudah ada (ambil yang terdekat saja)
@@ -359,13 +360,14 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       suggestions.push({
         type, tier,
         label: `LIMIT SCALP @ ${Math.round(exactEntry)}`,
-        note: confidence >= 70
-          ? (distPct <= 0.15 ? "Harga sangat dekat! Jaring sekarang." : "Pasang Limit Order di S/R.")
+        note: confidence >= 55
+          ? (distPct <= 0.3 ? "Harga dekat level! Siapkan Limit Order." : "Pasang Limit Order di S/R. Tunggu harga mendekati.")
           : "Pantau level ini. Konfirmasi masih lemah.",
-        reasoning: `Pantulan ${tier === 2 ? 'searah' : 'counter'} tren. Jarak: ${distPct.toFixed(2)}%. ATR M15: $${Math.round(atrM15)}. | ${modNotes.join(' | ')}`,
+        reasoning: `Pantulan ${tier === 2 ? 'searah' : 'counter'} tren | Jarak: ${distPct.toFixed(2)}% | ATR M15: ${Math.round(atrM15)} | ${modNotes.join(' | ')}`,
         confidence, zone: exactEntry.toFixed(1),
         sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
-        rr: calcRR(exactEntry, sl, tp2)
+        // FIX BUG #5: Tampilkan RR ke TP1 (lebih relevan untuk scalper), bukan TP2
+        rr: calcRR(exactEntry, sl, tp1)
       });
 
       if (tier === 2) tier2Added = true;
@@ -374,28 +376,97 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
   }
 
   // ═══════════════════════════════════════════════════════════════════
-  // SAFEGUARD: Jika Tier 2 atau Tier 3 kosong, buat fallback
-  // App TIDAK BOLEH "gagu" — selalu tampilkan sesuatu
+  // SAFEGUARD: Jika Tier 2 kosong, pakai level H1 terdekat sebagai scalp
+  // Jika tidak ada level sama sekali, tampilkan WAIT
   // ═══════════════════════════════════════════════════════════════════
   if (!tier2Added) {
-    const type: "BUY" | "SELL" = localTrend === "UP" ? "BUY" : localTrend === "DOWN" ? "SELL" : "BUY";
-    suggestions.push({
-      type: "WAIT", tier: 2,
-      label: "MENUNGGU LEVEL TERDEKAT",
-      note: `Menunggu harga mendekati Support/Resistance searah tren (${localTrend}).`,
-      reasoning: `Tidak ada S/R dalam radius 0.5% dari harga saat ini. ${session.label}`,
-      confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---"
-    });
+    const t2type: "BUY" | "SELL" = localTrend === "UP" ? "BUY" : localTrend === "DOWN" ? "SELL" : "BUY";
+
+    // Coba ambil level H1 terdekat (searah tren) sebagai fallback scalp
+    if (structure.levels && structure.levels.length > 0) {
+      const fallbackLevels = structure.levels
+        .filter(l => t2type === "BUY" ? l.type === "SUPPORT" : l.type === "RESISTANCE")
+        .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price));
+
+      const fb = fallbackLevels[0];
+      if (fb) {
+        const fbEntry = fb.price;
+        const fbDistPct = (Math.abs(currentPrice - fbEntry) / currentPrice) * 100;
+        const fbSlDist = Math.max(atrM15 * ENGINE_CONFIG.atrMultiplier.scalp, fbEntry * (ENGINE_CONFIG.minSlPct / 100));
+        const fbSl = t2type === "BUY" ? fbEntry - fbSlDist : fbEntry + fbSlDist;
+        const fbTp1 = t2type === "BUY" ? fbEntry + fbSlDist * 2 : fbEntry - fbSlDist * 2;
+        const fbTp2 = t2type === "BUY" ? fbEntry + fbSlDist * 3.5 : fbEntry - fbSlDist * 3.5;
+        const fbConf = Math.max(10, 55 - Math.round(fbDistPct * 8)); // makin jauh makin rendah conf
+        const { confidence: fbFinalConf, modNotes: fbMods } = applyModifiers(fbConf, t2type, false);
+
+        suggestions.push({
+          type: t2type, tier: 2,
+          label: `LIMIT SCALP @ ${Math.round(fbEntry)}`,
+          note: `Pasang limit order di ${t2type === "BUY" ? "support" : "resistance"} terdekat. Jarak ${fbDistPct.toFixed(1)}% dari harga.`,
+          reasoning: `Pantulan searah tren (fallback). Jarak: ${fbDistPct.toFixed(2)}%. ATR M15: ${Math.round(atrM15)}. | ${fbMods.join(' | ')}`,
+          confidence: fbFinalConf,
+          zone: fbEntry.toFixed(1),
+          sl: fbSl.toFixed(1), tp1: fbTp1.toFixed(1), tp2: fbTp2.toFixed(1),
+          rr: calcRR(fbEntry, fbSl, fbTp1)
+        });
+        tier2Added = true;
+      }
+    }
+
+    // Jika benar-benar tidak ada level sama sekali
+    if (!tier2Added) {
+      suggestions.push({
+        type: "WAIT", tier: 2,
+        label: "MENUNGGU LEVEL TERDEKAT",
+        note: `Menunggu harga mendekati Support/Resistance searah tren (${localTrend}).`,
+        reasoning: `Tidak ada S/R terdeteksi saat ini. ${session.label}`,
+        confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---"
+      });
+    }
   }
 
   if (!tier3Added) {
-    suggestions.push({
-      type: "WAIT", tier: 3,
-      label: "MENUNGGU PELUANG COUNTER",
-      note: "Menunggu harga menyentuh level counter-tren untuk scalp pantulan.",
-      reasoning: `Tidak ada level counter dalam jangkauan. ${session.label}`,
-      confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---"
-    });
+    // Coba pakai level counter-tren terdekat sebagai fallback
+    if (structure.levels && structure.levels.length > 0) {
+      const t3type: "BUY" | "SELL" = localTrend === "UP" ? "SELL" : "BUY";
+      const fallbackCounter = structure.levels
+        .filter(l => t3type === "BUY" ? l.type === "SUPPORT" : l.type === "RESISTANCE")
+        .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price));
+
+      const fb3 = fallbackCounter[0];
+      if (fb3) {
+        const fb3Entry = fb3.price;
+        const fb3DistPct = (Math.abs(currentPrice - fb3Entry) / currentPrice) * 100;
+        const fb3SlDist = Math.max(atrM15 * ENGINE_CONFIG.atrMultiplier.scalp, fb3Entry * (ENGINE_CONFIG.minSlPct / 100));
+        const fb3Sl = t3type === "BUY" ? fb3Entry - fb3SlDist : fb3Entry + fb3SlDist;
+        const fb3Tp1 = t3type === "BUY" ? fb3Entry + fb3SlDist * 2 : fb3Entry - fb3SlDist * 2;
+        const fb3Tp2 = t3type === "BUY" ? fb3Entry + fb3SlDist * 3 : fb3Entry - fb3SlDist * 3;
+        const fb3Conf = Math.max(10, 45 - Math.round(fb3DistPct * 10));
+        const { confidence: fb3FinalConf, modNotes: fb3Mods } = applyModifiers(fb3Conf, t3type, true);
+
+        suggestions.push({
+          type: t3type, tier: 3,
+          label: `LIMIT SCALP @ ${Math.round(fb3Entry)}`,
+          note: "Pantau level ini. Konfirmasi masih lemah.",
+          reasoning: `Pantulan counter tren (fallback). Jarak: ${fb3DistPct.toFixed(2)}%. ATR M15: ${Math.round(atrM15)}. | ${fb3Mods.join(' | ')}`,
+          confidence: fb3FinalConf,
+          zone: fb3Entry.toFixed(1),
+          sl: fb3Sl.toFixed(1), tp1: fb3Tp1.toFixed(1), tp2: fb3Tp2.toFixed(1),
+          rr: calcRR(fb3Entry, fb3Sl, fb3Tp1)
+        });
+        tier3Added = true;
+      }
+    }
+
+    if (!tier3Added) {
+      suggestions.push({
+        type: "WAIT", tier: 3,
+        label: "MENUNGGU PELUANG COUNTER",
+        note: "Menunggu harga menyentuh level counter-tren untuk scalp pantulan.",
+        reasoning: `Tidak ada level counter terdeteksi. ${session.label}`,
+        confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---"
+      });
+    }
   }
 
   // ═══════════════════════════════════════════════════════════════════

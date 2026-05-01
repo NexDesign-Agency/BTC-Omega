@@ -79,17 +79,17 @@ export function playAlertSound(level: AlertLevel): void {
 export function speakSmartAlert(type: "BUY" | "SELL", zone: string, level: AlertLevel, confidence: number): void {
   if (!window.speechSynthesis || level === "NONE" || level === "MODERATE") return;
 
-  const priority = level === "CRITICAL" ? "CRITICAL SIGNAL! " : "HIGH CONFIDENCE SIGNAL! ";
+  const priority = level === "CRITICAL" ? "Signal Detected. " : "Signal Detected. ";
   const zoneSpoken = zone.split('').map(c => c === '.' ? ' point ' : c).join(', ');
-  const msg = `${priority}${type} signal at ${zoneSpoken}. Confidence ${confidence} percent. Check terminal now.`;
+  const msg = `${priority}${type} at ${zoneSpoken}`;
 
   // Cancel previous speech
   window.speechSynthesis.cancel();
 
   const utt = new SpeechSynthesisUtterance(msg);
   utt.lang = 'en-US';
-  utt.rate = level === "CRITICAL" ? 0.9 : 0.85;
-  utt.pitch = level === "CRITICAL" ? 1.2 : 1.0;
+  utt.rate = 0.9;
+  utt.pitch = level === "CRITICAL" ? 1.1 : 1.0;
   utt.volume = 1.0;
   window.speechSynthesis.speak(utt);
 }

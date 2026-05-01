@@ -167,17 +167,36 @@ export default function HistoryPanel({ onClose, refreshTrigger }: Props) {
                     <div><p className="text-slate-600 mb-0.5">Entry</p><p className="text-white font-bold">{entry.zone}</p></div>
                     <div><p className="text-bear/70 mb-0.5">SL</p><p className="text-bear font-bold">{entry.sl}</p></div>
                     <div><p className="mb-0.5" style={{ color, opacity: 0.7 }}>TP1</p><p style={{ color }}>{entry.tp1}</p></div>
-                    <div><p className="mb-0.5" style={{ color, opacity: 0.7 }}>TP2</p><p className="font-black" style={{ color }}>{entry.tp2}</p></div>
+                    <div className="relative">
+                      <p className="mb-0.5" style={{ color, opacity: 0.7 }}>TP2</p>
+                      <p className="font-black" style={{ color }}>{entry.tp2}</p>
+                      {entry.pnlPips !== undefined && (
+                        <div className="absolute -top-1 -right-2 bg-bull/20 text-bull px-1 rounded border border-bull/30 text-[8px]">
+                          {entry.pnlPips > 0 ? "+" : ""}{Math.round(entry.pnlPips)}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1 flex-wrap">
-                    <span className="text-[9px] text-slate-600 mr-1">Outcome:</span>
-                    {OUTCOME_OPTS.map(opt => (
-                      <button key={opt.value} onClick={() => handleOutcome(entry.id, opt.value)}
-                        className={`flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold transition-all border ${entry.outcome === opt.value ? 'bg-white/10 border-white/20 ' + opt.color : 'border-transparent text-slate-600 hover:text-slate-400'}`}>
-                        {outcomeIcon(opt.value)}
-                        {opt.label}
-                      </button>
-                    ))}
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-1 flex-wrap">
+                      <span className="text-[9px] text-slate-600 mr-1">Outcome:</span>
+                      {OUTCOME_OPTS.map(opt => (
+                        <button key={opt.value} onClick={() => handleOutcome(entry.id, opt.value)}
+                          className={`flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold transition-all border ${entry.outcome === opt.value ? 'bg-white/10 border-white/20 ' + opt.color : 'border-transparent text-slate-600 hover:text-slate-400'}`}>
+                          {outcomeIcon(opt.value)}
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    {entry.outcome === "PENDING" && (
+                      <div className="flex items-center gap-1">
+                        <span className="relative flex h-1.5 w-1.5">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-bull opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-bull"></span>
+                        </span>
+                        <span className="text-[8px] font-black text-bull uppercase tracking-tighter">Live Tracking</span>
+                      </div>
+                    )}
                   </div>
                 </motion.div>
               );

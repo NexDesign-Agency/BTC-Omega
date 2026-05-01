@@ -40,23 +40,28 @@ export function saveHistory(entries: HistoryEntry[]): void {
   }
 }
 
-export function addSignalToHistory(signal: Omit<HistoryEntry, "id" | "timestamp" | "outcome">): HistoryEntry {
+export function addSignalToHistory(signal: Omit<HistoryEntry, "id" | "timestamp" | "outcome">): { id: string, isDupe: boolean } {
+  const timestamp = Date.now();
+  const id = `omega_${timestamp}_${Math.random().toString(36).slice(2, 7)}`;
   const entry: HistoryEntry = {
     ...signal,
-    id: `omega_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
-    timestamp: Date.now(),
+    id,
+    timestamp,
     outcome: "PENDING",
   };
+  
   const existing = loadHistory();
-  // Avoid duplicate if same type+zone within 5 minutes
-  const fiveMin = 5 * 60 * 1000;
-  const isDupe = existing.some(
-    e => e.type === entry.type && e.zone === entry.zone && (entry.timestamp - e.timestamp) < fiveMin
+  // Avoid duplicate if same type+zone within 10 minutes
+  const tenMin = 10 * 60 * 1000;
+  const dupe = existing.find(
+    e => e.type === entry.type && e.zone === entry.zone && (timestamp - e.timestamp) < tenMin
   );
-  if (!isDupe) {
+  
+  if (!dupe) {
     saveHistory([entry, ...existing]);
+    return { id, isDupe: false };
   }
-  return entry;
+  return { id: dupe.id, isDupe: true };
 }
 
 export function updateOutcome(id: string, outcome: SignalOutcome, pnlPips?: number, note?: string): void {

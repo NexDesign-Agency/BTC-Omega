@@ -2,8 +2,9 @@ import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { computeSignal, computeSignals, SignalResult, KlineData } from "./lib/signalEngine";
 import { getAlertLevel, playAlertSound, speakSmartAlert } from "./lib/alertEngine";
-import { addSignalToHistory, loadHistory, calcWinRate } from "./lib/historyEngine";
+import { addSignalToHistory, loadHistory, calcWinRate, updateOutcome } from "./lib/historyEngine";
 import { analyzeTFDirection, getSessionInfo, type TFDirection, type SessionInfo } from "./lib/analysisUtils";
+import { checkSignalOutcomes, checkEntryTrigger } from "./lib/outcomeEngine";
 import { ENGINE_CONFIG } from "./constants";
 import HistoryPanel from "./components/HistoryPanel";
 import {
@@ -107,6 +108,7 @@ export default function App() {
   const m5KlinesRef = useRef<any[]>([]);
   const lastSignalKeyRef = useRef<string>("");
   const alertReadyRef = useRef(false); // Cooldown: no alerts until 10s after app start
+  const activeSuggestionsRef = useRef<SignalResult[]>([]); // Memory-only queue for entry tracking
 
   useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
 
@@ -153,14 +155,14 @@ export default function App() {
           currentPrice = parseFloat(d.lastPrice);
         }
 
-        const fetchTF = async (interval: string) => {
-          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`);
+        const fetchTF = async (interval: string, limit = 150) => {
+          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
           if (res.ok) return await res.json();
           return [];
         };
 
         [m5Raw, m15Raw, h1Raw, h4Raw] = await Promise.all([
-          fetchTF('5m'), fetchTF('15m'), fetchTF('1h'), fetchTF('4h')
+          fetchTF('5m', 200), fetchTF('15m', 150), fetchTF('1h', 150), fetchTF('4h', 150)
         ]);
       } catch (e) {
         console.warn("Failed to fetch from Binance", e);
@@ -196,16 +198,52 @@ export default function App() {
       });
       setHighlightTrigger(prev => prev + 1);
 
-      const sigKey = `${sig.type}-${Math.round(parseFloat(sig.zone) / 50) * 50}`;
-      if ((sig.type === 'BUY' || sig.type === 'SELL') && sigKey !== lastSignalKeyRef.current) {
-        lastSignalKeyRef.current = sigKey;
-        fireSmartAlert(sig.type as 'BUY'|'SELL', sig.zone, sig.confidence, sig.tier);
-        if (sig.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
-          addSignalToHistory({ type: sig.type as 'BUY'|'SELL', tier: sig.tier, confidence: sig.confidence, label: sig.label, zone: sig.zone, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, rr: sig.rr });
-          setHistoryRefresh(prev => prev + 1);
-          setQuickWinRate(calcWinRate(loadHistory()).winRate || null);
-        }
+      // 1. Auto Outcome Tracking (untuk yang sudah ter-record di History)
+      const history = loadHistory();
+      const updates = checkSignalOutcomes(currentPrice, history);
+      if (updates.length > 0) {
+        setHistoryRefresh(prev => prev + 1);
+        setQuickWinRate(calcWinRate(loadHistory()).winRate || null);
       }
+
+      // 2. Entry Trigger Tracking (untuk suggestion di Memory)
+      const triggered = checkEntryTrigger(currentPrice, activeSuggestionsRef.current);
+      triggered.forEach(s => {
+        // Pindahkan dari Memory ke History saat kena Entry
+        const result = addSignalToHistory({ 
+          type: s.type as 'BUY'|'SELL', tier: s.tier, confidence: s.confidence, 
+          label: s.label, zone: s.zone, sl: s.sl, tp1: s.tp1, tp2: s.tp2, rr: s.rr 
+        });
+        if (!result.isDupe) {
+          setHistoryRefresh(prev => prev + 1);
+        }
+        // Hapus dari memory setelah ter-trigger
+        activeSuggestionsRef.current = activeSuggestionsRef.current.filter(item => item.label !== s.label);
+      });
+
+      // 3. Update Memory dengan suggestion terbaru
+      // Filter yang confidence >= threshold
+      const newSuggestions = allSuggestions.filter(s => s.type !== "WAIT" && s.confidence >= ENGINE_CONFIG.minConfidenceForRecord);
+      
+      newSuggestions.forEach(s => {
+        // Cek jika sudah ada di history (jangan record ulang)
+        const isAlreadyInHistory = history.some(h => h.label === s.label && h.outcome === "PENDING");
+        if (isAlreadyInHistory) return;
+
+        // Cek jika sudah ada di memory
+        const isAlreadyInMemory = activeSuggestionsRef.current.some(m => m.label === s.label);
+        
+        if (!isAlreadyInMemory) {
+          activeSuggestionsRef.current.push(s);
+          
+          // Alert suara tetap saat signal BARU muncul di dashboard (walau belum ter-trigger ke history)
+          const sigKey = `${s.type}-${Math.round(parseFloat(s.zone) / 20) * 20}`;
+          if (sigKey !== lastSignalKeyRef.current) {
+             lastSignalKeyRef.current = sigKey;
+             fireSmartAlert(s.type as 'BUY'|'SELL', s.zone, s.confidence, s.tier);
+          }
+        }
+      });
     } catch (err) {
       console.error("Analysis Error:", err);
     } finally {
@@ -225,14 +263,14 @@ export default function App() {
           newPrice = parseFloat(d.lastPrice);
         }
 
-        const fetchTF = async (interval: string) => {
-          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`);
+        const fetchTF = async (interval: string, limit = 150) => {
+          const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=${limit}`);
           if (res.ok) return await res.json();
           return [];
         };
 
         const [m5, m15, h1, h4] = await Promise.all([
-          fetchTF('5m'), fetchTF('15m'), fetchTF('1h'), fetchTF('4h')
+          fetchTF('5m', 200), fetchTF('15m', 150), fetchTF('1h', 150), fetchTF('4h', 150)
         ]);
         h4KlinesRef.current = h4;
         h1KlinesRef.current = h1;
@@ -277,8 +315,12 @@ export default function App() {
       } catch (err) {}
     };
 
-    const intervalId = setInterval(fetchBackgroundData, 3000);
-    return () => clearInterval(intervalId);
+    // FIX BUG #4: Gunakan setTimeout rekursif bukan setInterval
+    // agar fetch berikutnya BARU dimulai setelah fetch sebelumnya selesai
+    let bgTimeoutId: ReturnType<typeof setTimeout>;
+    const scheduleBg = () => { bgTimeoutId = setTimeout(async () => { await fetchBackgroundData(); scheduleBg(); }, 3000); };
+    scheduleBg();
+    return () => clearTimeout(bgTimeoutId);
   }, []);
 
   if (showSplash) {
@@ -372,7 +414,7 @@ export default function App() {
               <div key={tf} className="min-w-[120px] flex-1 px-3 py-1.5 border-r border-trading-border flex flex-col justify-center">
                 <div className="flex justify-between items-center">
                   <span className="text-[9px] font-bold text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded tracking-widest">{tf}</span>
-                  <span className="text-[8px] font-mono text-slate-600">{strength > 0 ? `${strength}%` : ''}</span>
+                  <span className="text-[8px] font-mono text-slate-600">{strength > 0 ? `${strength}%` : dir ? '' : ''}</span>
                 </div>
                 <p className={`text-[11px] font-black tracking-tight mt-0.5 ${trendColor}`}>
                   {dirLabel === 'UP' ? '▲ BULLISH' : dirLabel === 'DOWN' ? '▼ BEARISH' : '◆ SIDEWAYS'}
@@ -595,12 +637,20 @@ export default function App() {
             <div className="px-3 pb-4 flex-1">
               <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-30 mb-2">REASONING & BIAS</h3>
               <div className="space-y-2">
-                {(analysis?.suggestions || []).filter(s => !s.isSkip && !s.isAdvice).map((s, i) => (
-                  <div key={i} className="text-[10px] font-medium text-slate-500 leading-relaxed border-l-2 pl-2"
-                    style={{ borderColor: s.type === 'BUY' ? '#00ff88' : '#ff4466' }}>
-                    {s.reasoning}
-                  </div>
-                ))}
+                {(analysis?.suggestions || []).filter(s => !s.isSkip && !s.isAdvice).map((s, i) => {
+                  // FIX BUG #2: Pisahkan session label dari reasoning — tampilkan tanpa emoji Unicode yang bisa terpotong
+                  const reasonParts = s.reasoning.split('|').map(p => p.trim()).filter(Boolean);
+                  return (
+                    <div key={i} className="text-[10px] font-medium text-slate-500 leading-relaxed border-l-2 pl-2"
+                      style={{ borderColor: s.type === 'BUY' ? '#00ff88' : '#ff4466' }}>
+                      {reasonParts.map((part, j) => (
+                        <span key={j} className={j === 0 ? '' : 'opacity-70'}>
+                          {j > 0 ? ' · ' : ''}{part}
+                        </span>
+                      ))}
+                    </div>
+                  );
+                })}
                 {(!analysis?.suggestions || analysis.suggestions.filter(s => !s.isSkip && !s.isAdvice).length === 0) && (
                   <p className="text-slate-600 text-[10px]">Tunggu hasil pemindaian...</p>
                 )}

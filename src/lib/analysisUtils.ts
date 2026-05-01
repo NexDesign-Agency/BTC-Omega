@@ -150,12 +150,12 @@ export interface SessionInfo {
 export function getSessionInfo(utcHour?: number): SessionInfo {
   const h = utcHour ?? new Date().getUTCHours();
 
-  if (h >= 0 && h < 7)   return { name: "ASIA",     volatilityFactor: 0.90, label: "🌏 Asia (Low Vol)" };
-  if (h >= 7 && h < 8)   return { name: "OVERLAP",  volatilityFactor: 0.95, label: "🔄 Asia/London Overlap" };
-  if (h >= 8 && h < 12)  return { name: "LONDON",   volatilityFactor: 1.00, label: "🇬🇧 London" };
-  if (h >= 12 && h < 16) return { name: "OVERLAP",  volatilityFactor: 1.08, label: "🔥 London/NY Overlap" };
-  if (h >= 16 && h < 21) return { name: "NEW_YORK", volatilityFactor: 1.03, label: "🇺🇸 New York" };
-  return                         { name: "OFF",      volatilityFactor: 0.85, label: "🌙 Off-Hours" };
+  if (h >= 0 && h < 7)   return { name: "ASIA",     volatilityFactor: 0.90, label: "Asia (Low Vol)" };
+  if (h >= 7 && h < 8)   return { name: "OVERLAP",  volatilityFactor: 0.95, label: "Asia/London Overlap" };
+  if (h >= 8 && h < 12)  return { name: "LONDON",   volatilityFactor: 1.00, label: "London" };
+  if (h >= 12 && h < 16) return { name: "OVERLAP",  volatilityFactor: 1.08, label: "London/NY Overlap" };
+  if (h >= 16 && h < 21) return { name: "NEW_YORK", volatilityFactor: 1.03, label: "New York" };
+  return                         { name: "OFF",      volatilityFactor: 0.85, label: "Off-Hours" };
 }
 
 // ── Timeframe Direction Analysis (EMA-based) ──────────────────────────
