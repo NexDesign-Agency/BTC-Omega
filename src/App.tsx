@@ -4,7 +4,7 @@ import { computeSignal, computeSignals, SignalResult, KlineData } from "./lib/si
 import { getAlertLevel, playAlertSound, speakSmartAlert } from "./lib/alertEngine";
 import { addSignalToHistory, loadHistory, calcWinRate, updateOutcome } from "./lib/historyEngine";
 import { analyzeTFDirection, getSessionInfo, type TFDirection, type SessionInfo } from "./lib/analysisUtils";
-import { checkSignalOutcomes, checkEntryTrigger } from "./lib/outcomeEngine";
+import { checkSignalOutcomes } from "./lib/outcomeEngine";
 import { ENGINE_CONFIG } from "./constants";
 import HistoryPanel from "./components/HistoryPanel";
 import {
@@ -101,6 +101,7 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(false);
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [quickWinRate, setQuickWinRate] = useState<number | null>(null);
+  const [showLevelLines, setShowLevelLines] = useState(false);
 
   const h4KlinesRef = useRef<any[]>([]);
   const h1KlinesRef = useRef<any[]>([]);
@@ -108,7 +109,6 @@ export default function App() {
   const m5KlinesRef = useRef<any[]>([]);
   const lastSignalKeyRef = useRef<string>("");
   const alertReadyRef = useRef(false); // Cooldown: no alerts until 10s after app start
-  const activeSuggestionsRef = useRef<SignalResult[]>([]); // Memory-only queue for entry tracking
 
   useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
 
@@ -198,51 +198,35 @@ export default function App() {
       });
       setHighlightTrigger(prev => prev + 1);
 
-      // 1. Auto Outcome Tracking (untuk yang sudah ter-record di History)
+      // 1. Auto Outcome Tracking
       const history = loadHistory();
       const updates = checkSignalOutcomes(currentPrice, history);
       if (updates.length > 0) {
         setHistoryRefresh(prev => prev + 1);
         setQuickWinRate(calcWinRate(loadHistory()).winRate || null);
+        // Bisa tambah suara "Cha-ching" di sini nanti
       }
 
-      // 2. Entry Trigger Tracking (untuk suggestion di Memory)
-      const triggered = checkEntryTrigger(currentPrice, activeSuggestionsRef.current);
-      triggered.forEach(s => {
-        // Pindahkan dari Memory ke History saat kena Entry
-        const result = addSignalToHistory({ 
-          type: s.type as 'BUY'|'SELL', tier: s.tier, confidence: s.confidence, 
-          label: s.label, zone: s.zone, sl: s.sl, tp1: s.tp1, tp2: s.tp2, rr: s.rr 
-        });
-        if (!result.isDupe) {
-          setHistoryRefresh(prev => prev + 1);
-        }
-        // Hapus dari memory setelah ter-trigger
-        activeSuggestionsRef.current = activeSuggestionsRef.current.filter(item => item.label !== s.label);
-      });
-
-      // 3. Update Memory dengan suggestion terbaru (LATEST ONLY)
-      // Filter yang confidence >= threshold
-      const newSuggestions = allSuggestions.filter(s => s.type !== "WAIT" && s.confidence >= ENGINE_CONFIG.minConfidenceForRecord);
-      
-      newSuggestions.forEach(s => {
-        // Cek jika sudah ada di history (jangan record ulang jika masih PENDING)
-        const isAlreadyInHistory = history.some(h => h.label === s.label && h.outcome === "PENDING");
-        if (isAlreadyInHistory) return;
-
-        // LOGIKA BARU: Saran lama untuk Tier yang sama dianggap BATAL jika ada yang baru
-        // Hapus saran lama di memory dengan tier yang sama (Expired)
-        const isNew = !activeSuggestionsRef.current.some(m => m.label === s.label);
-        activeSuggestionsRef.current = activeSuggestionsRef.current.filter(m => m.tier !== s.tier);
-        
-        // Masukkan saran terbaru ke memory untuk dipantau Entry-nya
-        activeSuggestionsRef.current.push(s);
-        
-        if (isNew) {
-          const sigKey = `${s.type}-${Math.round(parseFloat(s.zone) / 20) * 20}`;
-          if (sigKey !== lastSignalKeyRef.current) {
-             lastSignalKeyRef.current = sigKey;
+      // 2. Record New Signals from ALL 3 Cards
+      // Hanya record jika confidence >= threshold (75%)
+      allSuggestions.forEach(s => {
+        if (s.type !== "WAIT" && s.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
+          const result = addSignalToHistory({ 
+            type: s.type as 'BUY'|'SELL', 
+            tier: s.tier, 
+            confidence: s.confidence, 
+            label: s.label, 
+            zone: s.zone, 
+            sl: s.sl, 
+            tp1: s.tp1, 
+            tp2: s.tp2, 
+            rr: s.rr 
+          });
+          
+          // Jika baru pertama kali di-record (bukan duplikat), kasih alert
+          if (!result.isDupe) {
              fireSmartAlert(s.type as 'BUY'|'SELL', s.zone, s.confidence, s.tier);
+             setHistoryRefresh(prev => prev + 1);
           }
         }
       });
@@ -386,6 +370,30 @@ export default function App() {
             <span className="hidden sm:inline">{loading ? "SCANNING..." : "SCAN MARKET"}</span>
             <span className="inline sm:hidden">{loading ? "SCAN" : "SCAN"}</span>
           </button>
+          {/* ── PLOT LEVELS BUTTON ── */}
+          {analysis && (
+            <button
+              onClick={() => setShowLevelLines(v => !v)}
+              className={`relative flex items-center gap-1.5 px-3 py-2 border rounded-md text-[10px] font-black transition-all ${
+                showLevelLines
+                  ? 'bg-bull/20 border-bull/60 text-bull shadow-[0_0_12px_rgba(0,255,136,0.3)]'
+                  : 'bg-white/5 hover:bg-white/10 border-trading-border text-slate-400 hover:text-white'
+              }`}
+              title="Toggle Signal Level Lines on Chart"
+            >
+              {showLevelLines ? (
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 6h8M1 3h10M1 9h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                  <path d="M10 2L2 10" stroke="#ff4466" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                  <path d="M2 6h8M1 3h10M1 9h10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"/>
+                </svg>
+              )}
+              <span className="hidden sm:inline">{showLevelLines ? 'HIDE LINES' : 'PLOT LEVELS'}</span>
+            </button>
+          )}
           <button
             onClick={() => setShowHistory(true)}
             className="relative flex items-center gap-1.5 px-3 py-2 bg-white/5 hover:bg-white/10 border border-trading-border rounded-md text-[10px] font-black text-slate-400 hover:text-white transition-all"
@@ -450,6 +458,81 @@ export default function App() {
             {/* TRADING VIEW CHART CONTAINER */}
             <div className="flex-1 w-full bg-trading-bg relative overflow-hidden">
               <div id="tv_chart_container" className="h-full w-full" />
+
+              {/* ── SIGNAL LEVEL LINES OVERLAY ── */}
+              {showLevelLines && analysis && (() => {
+                const sugs = analysis.suggestions || [];
+                const p1 = sugs.find(s => s.tier === 1 && s.type !== 'WAIT');
+                const p2 = sugs.find(s => s.tier === 2 && s.type !== 'WAIT');
+                const p3 = sugs.find(s => s.tier === 3 && s.type !== 'WAIT');
+
+                const rawPrices = [
+                  p1?.zone, p1?.sl, p1?.tp1, p1?.tp2,
+                  p2?.zone, p2?.sl, p2?.tp1,
+                  p3?.zone, p3?.sl, p3?.tp1,
+                  String(analysis.price)
+                ].map(v => parseFloat(v || '0')).filter(v => v > 0);
+
+                if (!rawPrices.length) return null;
+
+                const hi = Math.max(...rawPrices) * 1.002;
+                const lo = Math.min(...rawPrices) * 0.998;
+                const rng = hi - lo;
+                const pct = (price: number) => `${((hi - price) / rng) * 100}%`;
+
+                type L = { price: number; lbl: string; clr: string; dash?: string; w?: number };
+                const ls: L[] = [];
+
+                const push = (sig: typeof p1, clr: string, tag: string) => {
+                  if (!sig) return;
+                  const e = parseFloat(sig.zone);
+                  if (e > 0) ls.push({ price: e, lbl: `${tag}  $${e.toLocaleString(undefined,{maximumFractionDigits:0})}`, clr, w: 2 });
+                };
+
+                push(p1, '#00ff88', 'PRIMARY');
+                push(p2, '#f59e0b', 'SCALP  ');
+                push(p3, '#f43f5e', 'COUNTER');
+                ls.push({ price: analysis.price, lbl: `NOW   $${analysis.price.toLocaleString(undefined,{maximumFractionDigits:0})}`, clr: '#ffffff', w: 1, dash: '2 2' });
+
+                return (
+                  <div className="absolute inset-0 z-20" style={{ pointerEvents: 'none' }}>
+                    {/* X button */}
+                    <button
+                      style={{ pointerEvents: 'auto' }}
+                      className="absolute top-2 right-2 z-30 w-7 h-7 rounded-full bg-black/90 border border-white/30 flex items-center justify-center text-white text-base font-black hover:bg-red-900/80 hover:border-red-400 transition-all"
+                      onClick={() => setShowLevelLines(false)}
+                      title="Hide level lines"
+                    >×</button>
+
+                    {/* Legend */}
+                    <div className="absolute top-2 left-10 flex gap-3 bg-black/80 border border-white/10 rounded px-2 py-1.5 text-[9px] font-mono font-bold">
+                      {p1 && <span style={{ color: '#00ff88' }}>● PRIMARY</span>}
+                      {p2 && <span style={{ color: '#f59e0b' }}>● SCALP</span>}
+                      {p3 && <span style={{ color: '#f43f5e' }}>● COUNTER</span>}
+                    </div>
+
+                    {/* SVG lines */}
+                    <svg className="absolute inset-0 w-full h-full" style={{ overflow: 'visible' }}>
+                      {ls.map((l, i) => {
+                        const y = pct(l.price);
+                        return (
+                          <g key={i}>
+                            <line x1="0" y1={y} x2="100%" y2={y}
+                              stroke={l.clr} strokeWidth={l.w ?? 1.5}
+                              strokeDasharray={l.dash ?? ''}
+                              strokeOpacity="0.9"
+                            />
+                            <rect x="4" y={`calc(${y} - 10px)`} width="178" height="16" rx="3" fill="rgba(0,0,0,0.82)" />
+                            <text x="8" y={`calc(${y} + 3px)`}
+                              fill={l.clr} fontSize="9" fontFamily="monospace" fontWeight="bold"
+                            >{l.lbl}</text>
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 

@@ -64,7 +64,9 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
   }
 
   // ── Hitung semua analisis ────────────────────────────────────────
-  const structure = analyzeMarketStructure(m15, currentPrice);
+  // DUAL STRUCTURE: H1 untuk Primary (level major), M15 untuk Scalp/Counter (level minor)
+  const structureH1 = analyzeMarketStructure(h1, currentPrice);
+  const structureM15 = analyzeMarketStructure(m15, currentPrice);
   const atrM15 = capATR(calculateATR(m15, ENGINE_CONFIG.atrPeriod), currentPrice);
   const atrH1 = capATR(calculateATR(h1, ENGINE_CONFIG.atrPeriod), currentPrice);
   const volume = analyzeVolume(m15);
@@ -133,11 +135,11 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
   let primaryAdded = false;
 
   // Cek Breakout — Pattern compression + harga menembus garis
-  if (structure.pattern && structure.pattern.type !== "NONE" && structure.pattern.upperLine && structure.pattern.lowerLine) {
-    const upper = structure.pattern.upperLine;
-    const lower = structure.pattern.lowerLine;
+  if (structureM15.pattern && structureM15.pattern.type !== "NONE" && structureM15.pattern.upperLine && structureM15.pattern.lowerLine) {
+    const upper = structureM15.pattern.upperLine;
+    const lower = structureM15.pattern.lowerLine;
 
-    if (structure.pattern.compressionPct > 20) {
+    if (structureM15.pattern.compressionPct > 20) {
       const distUpper = (Math.abs(currentPrice - upper.currentValue) / currentPrice) * 100;
       const distLower = (Math.abs(currentPrice - lower.currentValue) / currentPrice) * 100;
 
@@ -148,8 +150,8 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
         // Breakout TP: cari resistance di atas, fallback ke ATR
         let tp1 = entry + slDist * 2, tp2 = entry + slDist * 4;
-        if (structure.levels && structure.levels.length > 0) {
-          const targets = structure.levels.filter(l => l.price > entry + slDist).sort((a, b) => a.price - b.price);
+        if (structureH1.levels && structureH1.levels.length > 0) {
+          const targets = structureH1.levels.filter(l => l.price > entry + slDist).sort((a, b) => a.price - b.price);
           if (targets[0]) tp1 = targets[0].price;
           if (targets[1]) tp2 = targets[1].price;
         }
@@ -159,9 +161,9 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
         suggestions.push({
           type: "BUY", tier: 1,
-          label: `EXPLOSIVE ${structure.pattern.type} BREAKOUT`,
+          label: `EXPLOSIVE ${structureM15.pattern.type} BREAKOUT`,
           note: confidence >= 70 ? "Breakout Atas terkonfirmasi! Eksekusi Market." : "Breakout terdeteksi, tapi konfirmasi lemah. Hati-hati.",
-          reasoning: `Harga memotong diagonal ${Math.round(upper.currentValue)} | Compression ${structure.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
+          reasoning: `Harga memotong diagonal ${Math.round(upper.currentValue)} | Compression ${structureM15.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
           confidence, zone: entry.toFixed(1),
           sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
           rr: calcRR(entry, sl, tp2)
@@ -174,8 +176,8 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
         // Breakout TP: cari support di bawah, fallback ke ATR
         let tp1 = entry - slDist * 2, tp2 = entry - slDist * 4;
-        if (structure.levels && structure.levels.length > 0) {
-          const targets = structure.levels.filter(l => l.price < entry - slDist).sort((a, b) => b.price - a.price);
+        if (structureH1.levels && structureH1.levels.length > 0) {
+          const targets = structureH1.levels.filter(l => l.price < entry - slDist).sort((a, b) => b.price - a.price);
           if (targets[0]) tp1 = targets[0].price;
           if (targets[1]) tp2 = targets[1].price;
         }
@@ -185,9 +187,9 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
         suggestions.push({
           type: "SELL", tier: 1,
-          label: `EXPLOSIVE ${structure.pattern.type} BREAKOUT`,
+          label: `EXPLOSIVE ${structureM15.pattern.type} BREAKOUT`,
           note: confidence >= 70 ? "Breakout Bawah terkonfirmasi! Eksekusi Market." : "Breakout terdeteksi, konfirmasi lemah. Hati-hati.",
-          reasoning: `Harga memotong diagonal ${Math.round(lower.currentValue)} | Compression ${structure.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
+          reasoning: `Harga memotong diagonal ${Math.round(lower.currentValue)} | Compression ${structureM15.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
           confidence, zone: entry.toFixed(1),
           sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
           rr: calcRR(entry, sl, tp2)
@@ -197,76 +199,89 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
     }
   }
 
-  // Jika tidak ada breakout → TREND-FOLLOWING pullback entry (SELALU tampil)
-  // Trader pro IKUT TREN: tren UP → BUY di pullback, tren DOWN → SELL di pullback
+  // Jika tidak ada breakout → TREND-FOLLOWING pullback entry dari H1 structure
+  // PRIMARY pakai H1 S/R levels (level major, lebih jauh dari harga)
   if (!primaryAdded) {
-    // Tentukan direction mengikuti tren (BUKAN melawan!)
     const h1Mid = (h1Highest + h1Lowest) / 2;
     const type: "BUY" | "SELL" = localTrend === "UP" ? "BUY" : localTrend === "DOWN" ? "SELL" : (currentPrice < h1Mid ? "BUY" : "SELL");
 
-    // Entry point: pullback ke area support (uptrend) atau resistance (downtrend)
-    // Uptrend  → BUY di recent swing low / support area (bukan di puncak!)
-    // Downtrend → SELL di recent swing high / resistance area (bukan di dasar!)
-    let entry: number;
-    if (type === "BUY") {
-      // Cari swing low terbaru dari 10 candle terakhir H1 sebagai pullback zone
-      const recentLows = h1Lows.slice(-10);
-      const recentSwingLow = Math.min(...recentLows);
-      // Entry di antara swing low dan midpoint (area value)
-      entry = (recentSwingLow + h1Mid) / 2;
-    } else {
-      const recentHighs = h1Highs.slice(-10);
-      const recentSwingHigh = Math.max(...recentHighs);
-      entry = (recentSwingHigh + h1Mid) / 2;
+    // Entry dari H1 S/R level (bukan rumus rata-rata!)
+    let entry: number | null = null;
+    let entrySource = "H1 S/R";
+
+    if (structureH1.levels && structureH1.levels.length > 0) {
+      if (type === "BUY") {
+        // Cari SUPPORT H1 terdekat di BAWAH harga (pullback zone)
+        const h1Supports = structureH1.levels
+          .filter(l => (l.type === "SUPPORT" || l.type === "KEY ZONE") && l.price < currentPrice)
+          .sort((a, b) => b.price - a.price); // terdekat dulu
+        if (h1Supports[0]) entry = h1Supports[0].price;
+      } else {
+        // Cari RESISTANCE H1 terdekat di ATAS harga (pullback zone untuk SELL)
+        const h1Resists = structureH1.levels
+          .filter(l => (l.type === "RESISTANCE" || l.type === "KEY ZONE") && l.price > currentPrice)
+          .sort((a, b) => a.price - b.price); // terdekat dulu
+        if (h1Resists[0]) entry = h1Resists[0].price;
+      }
+    }
+
+    // Fallback ke H1 swing math jika tidak ada level
+    if (entry === null) {
+      entrySource = "H1 swing";
+      if (type === "BUY") {
+        const recentSwingLow = Math.min(...h1Lows.slice(-10));
+        entry = (recentSwingLow + h1Mid) / 2;
+      } else {
+        const recentSwingHigh = Math.max(...h1Highs.slice(-10));
+        entry = (recentSwingHigh + h1Mid) / 2;
+      }
     }
 
     const slDist = atrH1 > 0 ? atrH1 * ENGINE_CONFIG.atrMultiplier.swing : entry * 0.003;
     const sl = type === "BUY" ? entry - slDist : entry + slDist;
 
-    // TP berdasarkan level S/R REAL di chart — bukan sekadar matematika
+    // TP dari H1 levels (level major)
     let tp1: number, tp2: number;
-    const fallbackTp1 = type === "BUY" ? entry + slDist * 2 : entry - slDist * 2;
-    const fallbackTp2 = type === "BUY" ? entry + slDist * 3.5 : entry - slDist * 3.5;
+    const fbTp1 = type === "BUY" ? entry + slDist * 2 : entry - slDist * 2;
+    const fbTp2 = type === "BUY" ? entry + slDist * 3.5 : entry - slDist * 3.5;
 
-    if (structure.levels && structure.levels.length > 0) {
+    if (structureH1.levels && structureH1.levels.length > 0) {
       if (type === "BUY") {
-        // Cari resistance DI ATAS entry, sort dari dekat ke jauh
-        const resistAbove = structure.levels
-          .filter(l => (l.type === "RESISTANCE" || l.type === "KEY ZONE") && l.price > entry + slDist)
+        const targets = structureH1.levels
+          .filter(l => (l.type === "RESISTANCE" || l.type === "KEY ZONE") && l.price > entry! + slDist)
           .sort((a, b) => a.price - b.price);
-        tp1 = resistAbove[0]?.price ?? fallbackTp1;
-        tp2 = resistAbove[1]?.price ?? (resistAbove[0] ? resistAbove[0].price + slDist : fallbackTp2);
+        tp1 = targets[0]?.price ?? fbTp1;
+        tp2 = targets[1]?.price ?? (targets[0] ? targets[0].price + slDist : fbTp2);
       } else {
-        // Cari support DI BAWAH entry, sort dari dekat ke jauh
-        const supportBelow = structure.levels
-          .filter(l => (l.type === "SUPPORT" || l.type === "KEY ZONE") && l.price < entry - slDist)
+        const targets = structureH1.levels
+          .filter(l => (l.type === "SUPPORT" || l.type === "KEY ZONE") && l.price < entry! - slDist)
           .sort((a, b) => b.price - a.price);
-        tp1 = supportBelow[0]?.price ?? fallbackTp1;
-        tp2 = supportBelow[1]?.price ?? (supportBelow[0] ? supportBelow[0].price - slDist : fallbackTp2);
+        tp1 = targets[0]?.price ?? fbTp1;
+        tp2 = targets[1]?.price ?? (targets[0] ? targets[0].price - slDist : fbTp2);
       }
     } else {
-      tp1 = fallbackTp1;
-      tp2 = fallbackTp2;
+      tp1 = fbTp1;
+      tp2 = fbTp2;
     }
 
-    // Pastikan TP minimal lebih jauh dari SL (minimum RR 1:1.5)
+    // Minimum RR 1:1.5
     const minTp1Dist = slDist * 1.5;
     if (type === "BUY" && tp1 - entry < minTp1Dist) tp1 = entry + minTp1Dist;
     if (type === "SELL" && entry - tp1 < minTp1Dist) tp1 = entry - minTp1Dist;
 
     const baseConf = 72;
     const { confidence, modNotes } = applyModifiers(baseConf, type);
+    const distPct = ((Math.abs(currentPrice - entry) / currentPrice) * 100).toFixed(2);
 
     const trendLabel = localTrend === "UP" ? "PULLBACK BUY" : localTrend === "DOWN" ? "PULLBACK SELL" : "SWING LIMIT";
-    const tpSource = (structure.levels && structure.levels.length > 0) ? "S/R level" : "ATR projection";
 
     suggestions.push({
       type, tier: 1,
-      label: `${type} ${trendLabel} @ ${Math.round(entry)}`,
+      label: `PRIMARY ${trendLabel} @ ${Math.round(entry)}`,
       note: type === "BUY"
-        ? "Ikut tren naik. Tunggu pullback ke area support untuk BUY."
-        : "Ikut tren turun. Tunggu pullback ke area resistance untuk SELL.",
-      reasoning: `Tren: ${localTrend} | TP target: ${tpSource} | ATR H1: $${Math.round(atrH1)} | ${modNotes.join(' | ')}`,
+        ? "Ikut tren naik. Tunggu pullback ke H1 support untuk BUY."
+        : "Ikut tren turun. Tunggu pullback ke H1 resistance untuk SELL.",
+      reasoning: `Tren: ${localTrend} | Entry: ${entrySource} (${distPct}%) | ATR H1: $${Math.round(atrH1)} | ${modNotes.join(' | ')}`,
       confidence, zone: entry.toFixed(1),
       sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
       rr: calcRR(entry, sl, tp2)
@@ -279,9 +294,9 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
   let tier2Added = false;
   let tier3Added = false;
 
-  if (structure.levels && structure.levels.length > 0) {
+  if (structureM15.levels && structureM15.levels.length > 0) {
     // Sort levels by distance to current price (closest first)
-    const sortedLevels = [...structure.levels].sort(
+    const sortedLevels = [...structureM15.levels].sort(
       (a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price)
     );
 
@@ -289,8 +304,7 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       const exactEntry = lvl.price;
       const distPct = (Math.abs(currentPrice - exactEntry) / currentPrice) * 100;
 
-      // Fix Bug: Pastikan tipe BUY/SELL akurat berdasarkan posisi harga vs level
-      const type: "BUY" | "SELL" = (lvl.type === "SUPPORT" || (lvl.type === "KEY ZONE" && currentPrice > exactEntry)) ? "BUY" : "SELL";
+      const type: "BUY" | "SELL" = lvl.type === "SUPPORT" ? "BUY" : "SELL";
 
       // Tentukan tier dulu sebelum filter radius
       let tier = 3;
@@ -298,9 +312,8 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       if (localTrend === "DOWN" && type === "SELL") tier = 2;
       if (localTrend === "SIDEWAYS") tier = 2;
 
-      // FIX: Radius diperlebar agar tier 2 tidak selalu kosong
-      // Tier 2 (searah tren): 1.5%, Tier 3 (counter): 0.8%
-      const maxDist = tier === 2 ? 1.5 : 0.8;
+      // Scalp (M15): radius 1.0%, Counter: radius 1.5%
+      const maxDist = tier === 2 ? 1.0 : 1.5;
       if (distPct > maxDist) continue;
 
       // Skip jika tier ini sudah ada (ambil yang terdekat saja)
@@ -318,8 +331,8 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       const fbTp1 = type === "BUY" ? exactEntry + slDist * 2 : exactEntry - slDist * 2;
       const fbTp2 = type === "BUY" ? exactEntry + slDist * 3.5 : exactEntry - slDist * 3.5;
 
-      if (structure.levels && structure.levels.length > 1) {
-        const otherLevels = structure.levels.filter(l => l.price !== exactEntry);
+      if (structureM15.levels && structureM15.levels.length > 1) {
+        const otherLevels = structureM15.levels.filter(l => l.price !== exactEntry);
         if (type === "BUY") {
           // BUY → TP di RESISTANCE/KEY ZONE di atas entry
           const targets = otherLevels
@@ -360,7 +373,7 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
       suggestions.push({
         type, tier,
-        label: `${type} SCALP @ ${Math.round(exactEntry)}`,
+        label: `LIMIT SCALP @ ${Math.round(exactEntry)}`,
         note: confidence >= 55
           ? (distPct <= 0.3 ? "Harga dekat level! Siapkan Limit Order." : "Pasang Limit Order di S/R. Tunggu harga mendekati.")
           : "Pantau level ini. Konfirmasi masih lemah.",
@@ -384,8 +397,8 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
     const t2type: "BUY" | "SELL" = localTrend === "UP" ? "BUY" : localTrend === "DOWN" ? "SELL" : "BUY";
 
     // Coba ambil level H1 terdekat (searah tren) sebagai fallback scalp
-    if (structure.levels && structure.levels.length > 0) {
-      const fallbackLevels = structure.levels
+    if (structureM15.levels && structureM15.levels.length > 0) {
+      const fallbackLevels = structureM15.levels
         .filter(l => t2type === "BUY" ? l.type === "SUPPORT" : l.type === "RESISTANCE")
         .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price));
 
@@ -393,24 +406,28 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       if (fb) {
         const fbEntry = fb.price;
         const fbDistPct = (Math.abs(currentPrice - fbEntry) / currentPrice) * 100;
-        const fbSlDist = Math.max(atrM15 * ENGINE_CONFIG.atrMultiplier.scalp, fbEntry * (ENGINE_CONFIG.minSlPct / 100));
-        const fbSl = t2type === "BUY" ? fbEntry - fbSlDist : fbEntry + fbSlDist;
-        const fbTp1 = t2type === "BUY" ? fbEntry + fbSlDist * 2 : fbEntry - fbSlDist * 2;
-        const fbTp2 = t2type === "BUY" ? fbEntry + fbSlDist * 3.5 : fbEntry - fbSlDist * 3.5;
-        const fbConf = Math.max(10, 55 - Math.round(fbDistPct * 8)); // makin jauh makin rendah conf
-        const { confidence: fbFinalConf, modNotes: fbMods } = applyModifiers(fbConf, t2type, false);
 
-        suggestions.push({
-          type: t2type, tier: 2,
-          label: `LIMIT SCALP @ ${Math.round(fbEntry)}`,
-          note: `Pasang limit order di ${t2type === "BUY" ? "support" : "resistance"} terdekat. Jarak ${fbDistPct.toFixed(1)}% dari harga.`,
-          reasoning: `Pantulan searah tren (fallback). Jarak: ${fbDistPct.toFixed(2)}%. ATR M15: ${Math.round(atrM15)}. | ${fbMods.join(' | ')}`,
-          confidence: fbFinalConf,
-          zone: fbEntry.toFixed(1),
-          sl: fbSl.toFixed(1), tp1: fbTp1.toFixed(1), tp2: fbTp2.toFixed(1),
-          rr: calcRR(fbEntry, fbSl, fbTp1)
-        });
-        tier2Added = true;
+        // Fallback scalp max 1.5%
+        if (fbDistPct <= 1.5) {
+          const fbSlDist = Math.max(atrM15 * ENGINE_CONFIG.atrMultiplier.scalp, fbEntry * (ENGINE_CONFIG.minSlPct / 100));
+          const fbSl = t2type === "BUY" ? fbEntry - fbSlDist : fbEntry + fbSlDist;
+          const fbTp1 = t2type === "BUY" ? fbEntry + fbSlDist * 2 : fbEntry - fbSlDist * 2;
+          const fbTp2 = t2type === "BUY" ? fbEntry + fbSlDist * 3.5 : fbEntry - fbSlDist * 3.5;
+          const fbConf = Math.max(10, 55 - Math.round(fbDistPct * 8));
+          const { confidence: fbFinalConf, modNotes: fbMods } = applyModifiers(fbConf, t2type, false);
+
+          suggestions.push({
+            type: t2type, tier: 2,
+            label: `LIMIT SCALP @ ${Math.round(fbEntry)}`,
+            note: `Pasang limit order di ${t2type === "BUY" ? "support" : "resistance"} terdekat. Jarak ${fbDistPct.toFixed(1)}% dari harga.`,
+            reasoning: `Pantulan searah tren (fallback) | Jarak: ${fbDistPct.toFixed(2)}% | ATR M15: ${Math.round(atrM15)} | ${fbMods.join(' | ')}`,
+            confidence: fbFinalConf,
+            zone: fbEntry.toFixed(1),
+            sl: fbSl.toFixed(1), tp1: fbTp1.toFixed(1), tp2: fbTp2.toFixed(1),
+            rr: calcRR(fbEntry, fbSl, fbTp1)
+          });
+          tier2Added = true;
+        }
       }
     }
 
@@ -428,9 +445,9 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
   if (!tier3Added) {
     // Coba pakai level counter-tren terdekat sebagai fallback
-    if (structure.levels && structure.levels.length > 0) {
+    if (structureM15.levels && structureM15.levels.length > 0) {
       const t3type: "BUY" | "SELL" = localTrend === "UP" ? "SELL" : "BUY";
-      const fallbackCounter = structure.levels
+      const fallbackCounter = structureM15.levels
         .filter(l => t3type === "BUY" ? l.type === "SUPPORT" : l.type === "RESISTANCE")
         .sort((a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price));
 
@@ -438,24 +455,28 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       if (fb3) {
         const fb3Entry = fb3.price;
         const fb3DistPct = (Math.abs(currentPrice - fb3Entry) / currentPrice) * 100;
-        const fb3SlDist = Math.max(atrM15 * ENGINE_CONFIG.atrMultiplier.scalp, fb3Entry * (ENGINE_CONFIG.minSlPct / 100));
-        const fb3Sl = t3type === "BUY" ? fb3Entry - fb3SlDist : fb3Entry + fb3SlDist;
-        const fb3Tp1 = t3type === "BUY" ? fb3Entry + fb3SlDist * 2 : fb3Entry - fb3SlDist * 2;
-        const fb3Tp2 = t3type === "BUY" ? fb3Entry + fb3SlDist * 3 : fb3Entry - fb3SlDist * 3;
-        const fb3Conf = Math.max(10, 45 - Math.round(fb3DistPct * 10));
-        const { confidence: fb3FinalConf, modNotes: fb3Mods } = applyModifiers(fb3Conf, t3type, true);
 
-        suggestions.push({
-          type: t3type, tier: 3,
-          label: `LIMIT SCALP @ ${Math.round(fb3Entry)}`,
-          note: "Pantau level ini. Konfirmasi masih lemah.",
-          reasoning: `Pantulan counter tren (fallback). Jarak: ${fb3DistPct.toFixed(2)}%. ATR M15: ${Math.round(atrM15)}. | ${fb3Mods.join(' | ')}`,
-          confidence: fb3FinalConf,
-          zone: fb3Entry.toFixed(1),
-          sl: fb3Sl.toFixed(1), tp1: fb3Tp1.toFixed(1), tp2: fb3Tp2.toFixed(1),
-          rr: calcRR(fb3Entry, fb3Sl, fb3Tp1)
-        });
-        tier3Added = true;
+        // Counter fallback max 2.0%
+        if (fb3DistPct <= 2.0) {
+          const fb3SlDist = Math.max(atrM15 * ENGINE_CONFIG.atrMultiplier.scalp, fb3Entry * (ENGINE_CONFIG.minSlPct / 100));
+          const fb3Sl = t3type === "BUY" ? fb3Entry - fb3SlDist : fb3Entry + fb3SlDist;
+          const fb3Tp1 = t3type === "BUY" ? fb3Entry + fb3SlDist * 2 : fb3Entry - fb3SlDist * 2;
+          const fb3Tp2 = t3type === "BUY" ? fb3Entry + fb3SlDist * 3 : fb3Entry - fb3SlDist * 3;
+          const fb3Conf = Math.max(10, 45 - Math.round(fb3DistPct * 10));
+          const { confidence: fb3FinalConf, modNotes: fb3Mods } = applyModifiers(fb3Conf, t3type, true);
+
+          suggestions.push({
+            type: t3type, tier: 3,
+            label: `LIMIT SCALP @ ${Math.round(fb3Entry)}`,
+            note: "Pantau level ini. Konfirmasi masih lemah.",
+            reasoning: `Counter tren (fallback) | Jarak: ${fb3DistPct.toFixed(2)}% | ATR M15: ${Math.round(atrM15)} | ${fb3Mods.join(' | ')}`,
+            confidence: fb3FinalConf,
+            zone: fb3Entry.toFixed(1),
+            sl: fb3Sl.toFixed(1), tp1: fb3Tp1.toFixed(1), tp2: fb3Tp2.toFixed(1),
+            rr: calcRR(fb3Entry, fb3Sl, fb3Tp1)
+          });
+          tier3Added = true;
+        }
       }
     }
 

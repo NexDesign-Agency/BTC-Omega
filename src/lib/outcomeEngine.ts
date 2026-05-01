@@ -1,29 +1,6 @@
 import { HistoryEntry, SignalOutcome, updateOutcome } from './historyEngine';
 
 /**
- * Memeriksa apakah harga menyentuh zona Entry
- */
-export function checkEntryTrigger(currentPrice: number, suggestions: any[]): any[] {
-  const triggered: any[] = [];
-  for (const s of suggestions) {
-    const entry = parseFloat(s.zone);
-    const isBuy = s.type === "BUY";
-    const threshold = entry * 0.001; // 0.1% tolerance
-
-    if (isBuy) {
-      if (currentPrice <= entry + threshold && currentPrice >= entry - threshold * 2) {
-        triggered.push(s);
-      }
-    } else {
-      if (currentPrice >= entry - threshold && currentPrice <= entry + threshold * 2) {
-        triggered.push(s);
-      }
-    }
-  }
-  return triggered;
-}
-
-/**
  * Outcome Engine v1.0
  * Membandingkan harga saat ini dengan signal yang berstatus PENDING.
  * Menghasilkan daftar update untuk disimpan ke history.
@@ -58,16 +35,17 @@ export function checkSignalOutcomes(currentPrice: number, history: HistoryEntry[
         pnl = sl - entry;
       }
     } else {
-      // SELL logic
-      if (currentPrice <= tp2) {
+      // SELL logic — TP1 lebih dekat (lebih tinggi), TP2 lebih jauh (lebih rendah)
+      // Cek SL dulu (di atas entry), lalu TP1, lalu TP2
+      if (currentPrice >= sl) {
+        hit = "SL";
+        pnl = entry - sl; // negatif
+      } else if (!isNaN(tp2) && currentPrice <= tp2) {
         hit = "TP2";
         pnl = entry - tp2;
       } else if (currentPrice <= tp1) {
         hit = "TP1";
         pnl = entry - tp1;
-      } else if (currentPrice >= sl) {
-        hit = "SL";
-        pnl = entry - sl;
       }
     }
 

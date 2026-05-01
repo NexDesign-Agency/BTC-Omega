@@ -86,7 +86,7 @@ export function analyzeMarketStructure(klines: any[], currentPrice: number) {
   const highs = recent.map(k => parseFloat(k[2]));
   const lows = recent.map(k => parseFloat(k[3]));
 
-  const { ph, pl } = findPivots(highs, lows, 4);
+  const { ph, pl } = findPivots(highs, lows, 3);
 
   // 1. Horizontal Levels
   const resClusters = clusterLevels(ph.map(p => p.p), currentPrice);
@@ -94,9 +94,8 @@ export function analyzeMarketStructure(klines: any[], currentPrice: number) {
   
   const levels: KeyLevel[] = [];
 
-  // FIX BUG #1: Ambil 3 level (bukan 2) di atas dan di bawah harga
-  // agar tier 2 scalp punya lebih banyak peluang menemukan level dalam radius
-  resClusters.filter(c => c.price > currentPrice).slice(-3).forEach(c => {
+  // Ambil 5 level per sisi agar scalp punya cukup level dalam radius
+  resClusters.filter(c => c.price > currentPrice).slice(-5).forEach(c => {
     levels.push({
       price: c.price,
       type: "RESISTANCE",
@@ -104,7 +103,7 @@ export function analyzeMarketStructure(klines: any[], currentPrice: number) {
       label: `RES ${Math.round(c.price)}`
     });
   });
-  supClusters.filter(c => c.price < currentPrice).slice(0, 3).forEach(c => {
+  supClusters.filter(c => c.price < currentPrice).slice(0, 5).forEach(c => {
     levels.push({
       price: c.price,
       type: "SUPPORT",
