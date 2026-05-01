@@ -211,13 +211,43 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
     const slDist = atrH1 > 0 ? atrH1 * ENGINE_CONFIG.atrMultiplier.swing : entry * 0.003;
     const sl = type === "BUY" ? entry - slDist : entry + slDist;
-    const tp1 = type === "BUY" ? entry + slDist * 3 : entry - slDist * 3;
-    const tp2 = type === "BUY" ? entry + slDist * 6 : entry - slDist * 6;
+
+    // TP berdasarkan level S/R REAL di chart — bukan sekadar matematika
+    let tp1: number, tp2: number;
+    const fallbackTp1 = type === "BUY" ? entry + slDist * 2 : entry - slDist * 2;
+    const fallbackTp2 = type === "BUY" ? entry + slDist * 3.5 : entry - slDist * 3.5;
+
+    if (structure.levels && structure.levels.length > 0) {
+      if (type === "BUY") {
+        // Cari resistance DI ATAS entry, sort dari dekat ke jauh
+        const resistAbove = structure.levels
+          .filter(l => (l.type === "RESISTANCE" || l.type === "KEY ZONE") && l.price > entry + slDist)
+          .sort((a, b) => a.price - b.price);
+        tp1 = resistAbove[0]?.price ?? fallbackTp1;
+        tp2 = resistAbove[1]?.price ?? (resistAbove[0] ? resistAbove[0].price + slDist : fallbackTp2);
+      } else {
+        // Cari support DI BAWAH entry, sort dari dekat ke jauh
+        const supportBelow = structure.levels
+          .filter(l => (l.type === "SUPPORT" || l.type === "KEY ZONE") && l.price < entry - slDist)
+          .sort((a, b) => b.price - a.price);
+        tp1 = supportBelow[0]?.price ?? fallbackTp1;
+        tp2 = supportBelow[1]?.price ?? (supportBelow[0] ? supportBelow[0].price - slDist : fallbackTp2);
+      }
+    } else {
+      tp1 = fallbackTp1;
+      tp2 = fallbackTp2;
+    }
+
+    // Pastikan TP minimal lebih jauh dari SL (minimum RR 1:1.5)
+    const minTp1Dist = slDist * 1.5;
+    if (type === "BUY" && tp1 - entry < minTp1Dist) tp1 = entry + minTp1Dist;
+    if (type === "SELL" && entry - tp1 < minTp1Dist) tp1 = entry - minTp1Dist;
 
     const baseConf = 72;
     const { confidence, modNotes } = applyModifiers(baseConf, type);
 
     const trendLabel = localTrend === "UP" ? "PULLBACK BUY" : localTrend === "DOWN" ? "PULLBACK SELL" : "SWING LIMIT";
+    const tpSource = (structure.levels && structure.levels.length > 0) ? "S/R level" : "ATR projection";
 
     suggestions.push({
       type, tier: 1,
@@ -225,7 +255,7 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       note: type === "BUY"
         ? "Ikut tren naik. Tunggu pullback ke area support untuk BUY."
         : "Ikut tren turun. Tunggu pullback ke area resistance untuk SELL.",
-      reasoning: `Tren dominan: ${localTrend}. Entry pullback di area value H1. ATR H1: $${Math.round(atrH1)}. | ${modNotes.join(' | ')}`,
+      reasoning: `Tren: ${localTrend}. TP target: ${tpSource}. ATR H1: $${Math.round(atrH1)}. | ${modNotes.join(' | ')}`,
       confidence, zone: entry.toFixed(1),
       sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
       rr: calcRR(entry, sl, tp2)
@@ -269,8 +299,35 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       const minSl = exactEntry * (ENGINE_CONFIG.minSlPct / 100);
       const slDist = Math.max(atrSl, minSl);
       const sl = type === "BUY" ? exactEntry - slDist : exactEntry + slDist;
-      const tp1 = type === "BUY" ? exactEntry + slDist * 2 : exactEntry - slDist * 2;
-      const tp2 = type === "BUY" ? exactEntry + slDist * 3.5 : exactEntry - slDist * 3.5;
+
+      // TP berdasarkan S/R level real — bukan sekadar SL × multiplier
+      let tp1: number, tp2: number;
+      const fbTp1 = type === "BUY" ? exactEntry + slDist * 2 : exactEntry - slDist * 2;
+      const fbTp2 = type === "BUY" ? exactEntry + slDist * 3.5 : exactEntry - slDist * 3.5;
+
+      if (structure.levels && structure.levels.length > 1) {
+        const otherLevels = structure.levels.filter(l => l.price !== exactEntry);
+        if (type === "BUY") {
+          const targets = otherLevels
+            .filter(l => l.price > exactEntry + slDist * 0.5)
+            .sort((a, b) => a.price - b.price);
+          tp1 = targets[0]?.price ?? fbTp1;
+          tp2 = targets[1]?.price ?? fbTp2;
+        } else {
+          const targets = otherLevels
+            .filter(l => l.price < exactEntry - slDist * 0.5)
+            .sort((a, b) => b.price - a.price);
+          tp1 = targets[0]?.price ?? fbTp1;
+          tp2 = targets[1]?.price ?? fbTp2;
+        }
+      } else {
+        tp1 = fbTp1;
+        tp2 = fbTp2;
+      }
+
+      // Pastikan minimum RR 1:1.5
+      if (type === "BUY" && tp1 - exactEntry < slDist * 1.5) tp1 = exactEntry + slDist * 1.5;
+      if (type === "SELL" && exactEntry - tp1 < slDist * 1.5) tp1 = exactEntry - slDist * 1.5;
 
       // Base confidence berdasarkan jarak
       let baseConf = 65;
