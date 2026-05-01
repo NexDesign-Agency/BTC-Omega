@@ -186,10 +186,29 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
     }
   }
 
-  // Jika tidak ada breakout → Swing Limit di H1 extreme (SELALU tampil)
+  // Jika tidak ada breakout → TREND-FOLLOWING pullback entry (SELALU tampil)
+  // Trader pro IKUT TREN: tren UP → BUY di pullback, tren DOWN → SELL di pullback
   if (!primaryAdded) {
-    const type: "BUY" | "SELL" = localTrend === "DOWN" ? "BUY" : "SELL";
-    const entry = type === "BUY" ? h1Lowest : h1Highest;
+    // Tentukan direction mengikuti tren (BUKAN melawan!)
+    const h1Mid = (h1Highest + h1Lowest) / 2;
+    const type: "BUY" | "SELL" = localTrend === "UP" ? "BUY" : localTrend === "DOWN" ? "SELL" : (currentPrice < h1Mid ? "BUY" : "SELL");
+
+    // Entry point: pullback ke area support (uptrend) atau resistance (downtrend)
+    // Uptrend  → BUY di recent swing low / support area (bukan di puncak!)
+    // Downtrend → SELL di recent swing high / resistance area (bukan di dasar!)
+    let entry: number;
+    if (type === "BUY") {
+      // Cari swing low terbaru dari 10 candle terakhir H1 sebagai pullback zone
+      const recentLows = h1Lows.slice(-10);
+      const recentSwingLow = Math.min(...recentLows);
+      // Entry di antara swing low dan midpoint (area value)
+      entry = (recentSwingLow + h1Mid) / 2;
+    } else {
+      const recentHighs = h1Highs.slice(-10);
+      const recentSwingHigh = Math.max(...recentHighs);
+      entry = (recentSwingHigh + h1Mid) / 2;
+    }
+
     const slDist = atrH1 > 0 ? atrH1 * ENGINE_CONFIG.atrMultiplier.swing : entry * 0.003;
     const sl = type === "BUY" ? entry - slDist : entry + slDist;
     const tp1 = type === "BUY" ? entry + slDist * 3 : entry - slDist * 3;
@@ -198,11 +217,15 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
     const baseConf = 72;
     const { confidence, modNotes } = applyModifiers(baseConf, type);
 
+    const trendLabel = localTrend === "UP" ? "PULLBACK BUY" : localTrend === "DOWN" ? "PULLBACK SELL" : "SWING LIMIT";
+
     suggestions.push({
       type, tier: 1,
-      label: `PRIMARY SWING LIMIT @ ${Math.round(entry)}`,
-      note: "Posisi swing utama. Pasang jaring di ekstrem struktur H1.",
-      reasoning: `Harga ekstrem H1 (tren ${localTrend}). ATR H1: $${Math.round(atrH1)}. | ${modNotes.join(' | ')}`,
+      label: `PRIMARY ${trendLabel} @ ${Math.round(entry)}`,
+      note: type === "BUY"
+        ? "Ikut tren naik. Tunggu pullback ke area support untuk BUY."
+        : "Ikut tren turun. Tunggu pullback ke area resistance untuk SELL.",
+      reasoning: `Tren dominan: ${localTrend}. Entry pullback di area value H1. ATR H1: $${Math.round(atrH1)}. | ${modNotes.join(' | ')}`,
       confidence, zone: entry.toFixed(1),
       sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
       rr: calcRR(entry, sl, tp2)
