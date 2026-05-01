@@ -264,7 +264,10 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       if (tier === 2 && tier2Added) continue;
       if (tier === 3 && tier3Added) continue;
 
-      const slDist = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.scalp : exactEntry * 0.0015;
+      // SL dengan floor minimum agar TP tidak dimakan spread
+      const atrSl = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.scalp : exactEntry * 0.003;
+      const minSl = exactEntry * (ENGINE_CONFIG.minSlPct / 100);
+      const slDist = Math.max(atrSl, minSl);
       const sl = type === "BUY" ? exactEntry - slDist : exactEntry + slDist;
       const tp1 = type === "BUY" ? exactEntry + slDist * 2 : exactEntry - slDist * 2;
       const tp2 = type === "BUY" ? exactEntry + slDist * 3.5 : exactEntry - slDist * 3.5;

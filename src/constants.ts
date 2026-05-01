@@ -6,8 +6,12 @@ export const ENGINE_CONFIG = {
   atrMultiplier: {
     breakout: 1.5,  // SL = ATR × 1.5
     swing: 2.0,     // SL = ATR × 2.0 (lebih lebar untuk swing)
-    scalp: 0.8,     // SL = ATR × 0.8 (ketat untuk scalp)
+    scalp: 1.5,     // SL = ATR × 1.5 (was 0.8 — terlalu kecil, dimakan spread)
   },
+
+  // Minimum SL sebagai % dari harga (floor agar TP tidak dimakan spread)
+  // BTC $77k × 0.3% = $231 minimum SL → TP1 minimum $462
+  minSlPct: 0.3,
 
   // Confidence
   maxConfidence: 98,
