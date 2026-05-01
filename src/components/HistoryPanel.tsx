@@ -148,7 +148,11 @@ export default function HistoryPanel({ onClose, refreshTrigger }: Props) {
 
               return (
                 <motion.div key={entry.id} initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, height: 0 }}
-                  className="rounded-lg border border-trading-border bg-trading-bg p-3">
+                  className={`rounded-lg border p-3 transition-all ${
+                    entry.outcome === "TP1" || entry.outcome === "TP2" 
+                    ? "border-bull/40 bg-bull/5 shadow-[0_0_15px_rgba(0,255,136,0.1)]" 
+                    : "border-trading-border bg-trading-bg"
+                  }`}>
                   <div className="flex justify-between items-center mb-2">
                     <div className="flex items-center gap-2">
                       {isBuy ? <TrendingUp size={12} style={{ color }} /> : <TrendingDown size={12} style={{ color }} />}
@@ -157,6 +161,12 @@ export default function HistoryPanel({ onClose, refreshTrigger }: Props) {
                       <span className="text-[9px] font-bold text-slate-400">{entry.confidence}%</span>
                     </div>
                     <div className="flex items-center gap-2">
+                      {(entry.outcome === "TP1" || entry.outcome === "TP2") && (
+                        <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} className="flex items-center gap-1 px-1.5 py-0.5 bg-bull/20 rounded-full border border-bull/30">
+                          <Trophy size={10} className="text-bull" />
+                          <span className="text-[8px] font-black text-bull uppercase">Champion</span>
+                        </motion.div>
+                      )}
                       <span className="text-[9px] text-slate-600 font-mono">{timeStr}</span>
                       <button onClick={() => handleDelete(entry.id)} className="p-0.5 hover:text-bear transition-colors text-slate-700">
                         <Trash2 size={10} />

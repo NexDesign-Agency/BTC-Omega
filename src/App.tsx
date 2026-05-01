@@ -221,22 +221,24 @@ export default function App() {
         activeSuggestionsRef.current = activeSuggestionsRef.current.filter(item => item.label !== s.label);
       });
 
-      // 3. Update Memory dengan suggestion terbaru
+      // 3. Update Memory dengan suggestion terbaru (LATEST ONLY)
       // Filter yang confidence >= threshold
       const newSuggestions = allSuggestions.filter(s => s.type !== "WAIT" && s.confidence >= ENGINE_CONFIG.minConfidenceForRecord);
       
       newSuggestions.forEach(s => {
-        // Cek jika sudah ada di history (jangan record ulang)
+        // Cek jika sudah ada di history (jangan record ulang jika masih PENDING)
         const isAlreadyInHistory = history.some(h => h.label === s.label && h.outcome === "PENDING");
         if (isAlreadyInHistory) return;
 
-        // Cek jika sudah ada di memory
-        const isAlreadyInMemory = activeSuggestionsRef.current.some(m => m.label === s.label);
+        // LOGIKA BARU: Saran lama untuk Tier yang sama dianggap BATAL jika ada yang baru
+        // Hapus saran lama di memory dengan tier yang sama (Expired)
+        const isNew = !activeSuggestionsRef.current.some(m => m.label === s.label);
+        activeSuggestionsRef.current = activeSuggestionsRef.current.filter(m => m.tier !== s.tier);
         
-        if (!isAlreadyInMemory) {
-          activeSuggestionsRef.current.push(s);
-          
-          // Alert suara tetap saat signal BARU muncul di dashboard (walau belum ter-trigger ke history)
+        // Masukkan saran terbaru ke memory untuk dipantau Entry-nya
+        activeSuggestionsRef.current.push(s);
+        
+        if (isNew) {
           const sigKey = `${s.type}-${Math.round(parseFloat(s.zone) / 20) * 20}`;
           if (sigKey !== lastSignalKeyRef.current) {
              lastSignalKeyRef.current = sigKey;

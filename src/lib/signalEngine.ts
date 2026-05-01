@@ -262,7 +262,7 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
     suggestions.push({
       type, tier: 1,
-      label: `PRIMARY ${trendLabel} @ ${Math.round(entry)}`,
+      label: `${type} ${trendLabel} @ ${Math.round(entry)}`,
       note: type === "BUY"
         ? "Ikut tren naik. Tunggu pullback ke area support untuk BUY."
         : "Ikut tren turun. Tunggu pullback ke area resistance untuk SELL.",
@@ -289,7 +289,8 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       const exactEntry = lvl.price;
       const distPct = (Math.abs(currentPrice - exactEntry) / currentPrice) * 100;
 
-      const type: "BUY" | "SELL" = lvl.type === "SUPPORT" ? "BUY" : "SELL";
+      // Fix Bug: Pastikan tipe BUY/SELL akurat berdasarkan posisi harga vs level
+      const type: "BUY" | "SELL" = (lvl.type === "SUPPORT" || (lvl.type === "KEY ZONE" && currentPrice > exactEntry)) ? "BUY" : "SELL";
 
       // Tentukan tier dulu sebelum filter radius
       let tier = 3;
@@ -359,7 +360,7 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
 
       suggestions.push({
         type, tier,
-        label: `LIMIT SCALP @ ${Math.round(exactEntry)}`,
+        label: `${type} SCALP @ ${Math.round(exactEntry)}`,
         note: confidence >= 55
           ? (distPct <= 0.3 ? "Harga dekat level! Siapkan Limit Order." : "Pasang Limit Order di S/R. Tunggu harga mendekati.")
           : "Pantau level ini. Konfirmasi masih lemah.",

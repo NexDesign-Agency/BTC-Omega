@@ -21,7 +21,7 @@ export interface HistoryEntry {
 }
 
 const STORAGE_KEY = "omega_signal_history";
-const MAX_ENTRIES = 200;
+const MAX_ENTRIES = 5;
 
 export function loadHistory(): HistoryEntry[] {
   try {
@@ -34,7 +34,14 @@ export function loadHistory(): HistoryEntry[] {
 
 export function saveHistory(entries: HistoryEntry[]): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(entries.slice(0, MAX_ENTRIES)));
+    // 1. Ambil yang PENDING (Live Tracking) - Batasi hanya 5 terbaru sesuai permintaan
+    const pending = entries.filter(e => e.outcome === "PENDING").slice(0, 5); 
+    
+    // 2. Ambil yang SUDAH SELESAI (TP/SL/MANUAL) - Jangan dihapus, simpan sebagai jurnal permanen
+    const closed = entries.filter(e => e.outcome !== "PENDING").slice(0, 500);
+    
+    const combined = [...pending, ...closed];
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(combined));
   } catch (e) {
     console.warn("History save failed:", e);
   }
