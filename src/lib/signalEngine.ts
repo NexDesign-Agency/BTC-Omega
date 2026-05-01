@@ -93,14 +93,15 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
   const h1Lowest = Math.min(...h1Lows);
 
   // ── Helper: Apply modifiers ke confidence ───────────────────────
-  function applyModifiers(baseConf: number, signalDir: "BUY" | "SELL"): { confidence: number; modNotes: string[] } {
+  function applyModifiers(baseConf: number, signalDir: "BUY" | "SELL", isCounter = false): { confidence: number; modNotes: string[] } {
     let conf = baseConf;
     const notes: string[] = [];
 
-    // Volume modifier
+    // Volume modifier — counter tren dihukum lebih berat
     if (volume.label === "SPIKE") { conf += 12; notes.push(`Vol SPIKE (${volume.volumeRatio.toFixed(1)}x)`); }
     else if (volume.label === "HIGH") { conf += 6; notes.push(`Vol HIGH (${volume.volumeRatio.toFixed(1)}x)`); }
-    else if (volume.label === "LOW") { conf -= 10; notes.push(`Vol LOW ⚠️`); }
+    else if (volume.label === "LOW") { conf -= isCounter ? 20 : 10; notes.push(`Vol LOW${isCounter ? ' ⛔' : ' ⚠️'}`); }
+    else if (volume.label === "NORMAL" && isCounter) { conf -= 5; notes.push(`Vol NORMAL (counter penalty)`); }
 
     // Confluence modifier
     if (confluence) {
@@ -109,12 +110,15 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       notes.push(`TF ${aligned}/4 aligned`);
     }
 
-    // Pattern modifier
+    // Pattern modifier — counter tren dihukum lebih berat kalau pattern berlawanan
     if (pattern) {
       const patDir = pattern.direction === "BULL" ? "BUY" : pattern.direction === "BEAR" ? "SELL" : null;
       if (patDir === signalDir && pattern.strength === 3) { conf += 10; notes.push(`${pattern.pattern} ✓`); }
       else if (patDir === signalDir && pattern.strength === 2) { conf += 5; notes.push(`${pattern.pattern}`); }
-      else if (patDir && patDir !== signalDir && pattern.strength >= 2) { conf -= 8; notes.push(`${pattern.pattern} berlawanan ⚠️`); }
+      else if (patDir && patDir !== signalDir && pattern.strength >= 2) {
+        conf -= isCounter ? 15 : 8;
+        notes.push(`${pattern.pattern} berlawanan${isCounter ? ' ⛔' : ' ⚠️'}`);
+      }
     }
 
     // Session modifier (multiply, bukan add — supaya efeknya proporsional)
@@ -221,14 +225,17 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       const exactEntry = lvl.price;
       const distPct = (Math.abs(currentPrice - exactEntry) / currentPrice) * 100;
 
-      if (distPct > 0.5) continue; // Diperlebar dari 0.4% supaya lebih banyak signal
-
       const type: "BUY" | "SELL" = lvl.type === "SUPPORT" ? "BUY" : "SELL";
 
+      // Tentukan tier dulu sebelum filter radius
       let tier = 3;
       if (localTrend === "UP" && type === "BUY") tier = 2;
       if (localTrend === "DOWN" && type === "SELL") tier = 2;
       if (localTrend === "SIDEWAYS") tier = 2;
+
+      // BUG 2 FIX: Radius berbeda per tier — searah tren lebih lebar
+      const maxDist = tier === 2 ? 0.8 : 0.5;
+      if (distPct > maxDist) continue;
 
       // Skip jika tier ini sudah ada (ambil yang terdekat saja)
       if (tier === 2 && tier2Added) continue;
@@ -246,7 +253,12 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
       else if (distPct <= 0.35) baseConf = 65;
       else baseConf = 55;
 
-      const { confidence, modNotes } = applyModifiers(baseConf, type);
+      // BUG 3 FIX: Counter tren mulai dari confidence lebih rendah
+      if (tier === 3) baseConf -= 10;
+
+      // BUG 1 FIX: Counter tren pakai modifier lebih ketat
+      const isCounter = tier === 3;
+      const { confidence, modNotes } = applyModifiers(baseConf, type, isCounter);
 
       suggestions.push({
         type, tier,
