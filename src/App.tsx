@@ -1,19 +1,24 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { computeSignal, computeSignals, SignalResult, KlineData } from "./lib/signalEngine";
+import { SignalResult, KlineData } from "./lib/signalEngine";
 import { getAlertLevel, playAlertSound, speakSmartAlert } from "./lib/alertEngine";
-import { addSignalToHistory, loadHistory, calcWinRate, updateOutcome } from "./lib/historyEngine";
+import { addSignalToHistory, loadHistory, calcWinRate } from "./lib/historyEngine";
 import { analyzeTFDirection, getSessionInfo, type TFDirection, type SessionInfo } from "./lib/analysisUtils";
 import { checkSignalOutcomes } from "./lib/outcomeEngine";
 import { ENGINE_CONFIG } from "./constants";
+import { fetchAIAnalysis, aiResultToSuggestions, type AIAnalysisResult } from "./lib/openRouterService";
 import HistoryPanel from "./components/HistoryPanel";
+import SettingsModal from "./components/SettingsModal";
+import AIChat from "./components/AIChat";
 import {
   TrendingUp,
   Zap,
   RefreshCw,
   ChevronLeft,
   ChevronRight,
-  Trophy
+  Trophy,
+  Settings,
+  Bot
 } from "lucide-react";
 
 // TradingView widget script loader
@@ -97,11 +102,16 @@ export default function App() {
   const [countdown, setCountdown] = useState(5);
   const [analysis, setAnalysis] = useState<MarketAnalysis | null>(null);
   const [highlightTrigger, setHighlightTrigger] = useState(0);
-  const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL">("SIGNAL");
+  const [mobileActiveTab, setMobileActiveTab] = useState<"CHART" | "SIGNAL" | "CHAT">("SIGNAL");
   const [showHistory, setShowHistory] = useState(false);
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [quickWinRate, setQuickWinRate] = useState<number | null>(null);
   const [showLevelLines, setShowLevelLines] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  const [openRouterKey, setOpenRouterKey] = useState(() => localStorage.getItem('omega_openrouter_key') || '');
+  const [openRouterModel, setOpenRouterModel] = useState(() => localStorage.getItem('omega_openrouter_model') || 'google/gemini-flash-1.5');
+  const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   const h4KlinesRef = useRef<any[]>([]);
   const h1KlinesRef = useRef<any[]>([]);
@@ -144,6 +154,7 @@ export default function App() {
 
   const runAnalysis = async () => {
     setLoading(true);
+    setAiLoading(true);
     try {
       let currentPrice = 0;
       let h4Raw: any[] = [], h1Raw: any[] = [], m15Raw: any[] = [], m5Raw: any[] = [];
@@ -174,10 +185,8 @@ export default function App() {
       m5KlinesRef.current = m5Raw;
 
       const kd: KlineData = { m5: m5Raw, m15: m15Raw, h1: h1Raw, h4: h4Raw };
-      const sig = computeSignal(currentPrice, kd);
-      const allSuggestions = computeSignals(currentPrice, kd);
 
-      // TF directions for strip
+      // TF directions for strip (offline - tetap dibutuhkan)
       const tfDirs: Record<string, TFDirection> = {};
       if (h4Raw.length >= 52) tfDirs.H4 = analyzeTFDirection(h4Raw, currentPrice);
       if (h1Raw.length >= 52) tfDirs.H1 = analyzeTFDirection(h1Raw, currentPrice);
@@ -185,55 +194,90 @@ export default function App() {
       if (m5Raw.length >= 52) tfDirs.M5 = analyzeTFDirection(m5Raw, currentPrice);
       const session = getSessionInfo();
 
-      setAnalysis({
-        price: currentPrice,
-        signal: {
-          type: sig.type, tier: sig.tier, confidence: sig.confidence,
-          zone: sig.zone, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, rr: sig.rr
-        },
-        suggestions: allSuggestions,
-        reasoning: sig.reasoning,
-        tfDirections: tfDirs,
-        session
-      });
-      setHighlightTrigger(prev => prev + 1);
+      if (openRouterKey && currentPrice) {
+        // ── AI MODE: Gunakan OpenRouter untuk analisis ────────────
+        try {
+          const aiResult = await fetchAIAnalysis(currentPrice, kd, openRouterKey, openRouterModel);
+          if (aiResult) {
+            setAiAnalysis(aiResult);
+            const aiSugs = aiResultToSuggestions(aiResult);
+            setAnalysis({
+              price: currentPrice,
+              signal: {
+                type: aiSugs[0]?.type ?? 'WAIT',
+                tier: 1,
+                confidence: aiResult.primaryEntry.confidence,
+                zone: aiResult.primaryEntry.entry,
+                sl: aiResult.primaryEntry.sl,
+                tp1: aiResult.primaryEntry.tp1,
+                tp2: aiResult.primaryEntry.tp2,
+                rr: aiResult.primaryEntry.rr,
+              },
+              suggestions: aiSugs,
+              reasoning: aiResult.primaryEntry.reasoning,
+              tfDirections: Object.fromEntries(
+                Object.entries(aiResult.tfDirections).map(([k, v]) => [k, v as TFDirection])
+              ),
+              session,
+            });
+            setHighlightTrigger(prev => prev + 1);
 
-      // 1. Auto Outcome Tracking
-      const history = loadHistory();
-      const updates = checkSignalOutcomes(currentPrice, history);
-      if (updates.length > 0) {
-        setHistoryRefresh(prev => prev + 1);
-        setQuickWinRate(calcWinRate(loadHistory()).winRate || null);
-        // Bisa tambah suara "Cha-ching" di sini nanti
-      }
-
-      // 2. Record New Signals from ALL 3 Cards
-      // Hanya record jika confidence >= threshold (75%)
-      allSuggestions.forEach(s => {
-        if (s.type !== "WAIT" && s.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
-          const result = addSignalToHistory({ 
-            type: s.type as 'BUY'|'SELL', 
-            tier: s.tier, 
-            confidence: s.confidence, 
-            label: s.label, 
-            zone: s.zone, 
-            sl: s.sl, 
-            tp1: s.tp1, 
-            tp2: s.tp2, 
-            rr: s.rr 
-          });
-          
-          // Jika baru pertama kali di-record (bukan duplikat), kasih alert
-          if (!result.isDupe) {
-             fireSmartAlert(s.type as 'BUY'|'SELL', s.zone, s.confidence, s.tier);
-             setHistoryRefresh(prev => prev + 1);
+            // Record AI signals to history
+            const history = loadHistory();
+            const updates = checkSignalOutcomes(currentPrice, history);
+            if (updates.length > 0) {
+              setHistoryRefresh(prev => prev + 1);
+              setQuickWinRate(calcWinRate(loadHistory()).winRate || null);
+            }
+            aiSugs.forEach(s => {
+              if (s.type !== "WAIT" && s.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
+                const result = addSignalToHistory({
+                  type: s.type as 'BUY' | 'SELL',
+                  tier: s.tier,
+                  confidence: s.confidence,
+                  label: s.label,
+                  zone: s.zone,
+                  sl: s.sl,
+                  tp1: s.tp1,
+                  tp2: s.tp2,
+                  rr: s.rr
+                });
+                if (!result.isDupe) {
+                  fireSmartAlert(s.type as 'BUY' | 'SELL', s.zone, s.confidence, s.tier);
+                  setHistoryRefresh(prev => prev + 1);
+                }
+              }
+            });
           }
+        } catch (aiErr) {
+          console.error("AI analysis failed:", aiErr);
+          setAiAnalysis(null);
+          setAnalysis({
+            price: currentPrice,
+            signal: { type: 'WAIT', tier: 0, confidence: 0, zone: '---', sl: '---', tp1: '---', tp2: '---', rr: '---' },
+            suggestions: [],
+            reasoning: `AI Error: ${aiErr instanceof Error ? aiErr.message : 'Gagal menghubungi AI. Coba lagi.'}`,
+            tfDirections: tfDirs,
+            session,
+          });
         }
-      });
+      } else {
+        // ── NO API KEY: Tampilkan placeholder ─────────────────────
+        setAiAnalysis(null);
+        setAnalysis({
+          price: currentPrice,
+          signal: { type: 'WAIT', tier: 0, confidence: 0, zone: '---', sl: '---', tp1: '---', tp2: '---', rr: '---' },
+          suggestions: [],
+          reasoning: 'Setup OpenRouter API key di tombol AI SETUP untuk mulai analisis.',
+          tfDirections: tfDirs,
+          session,
+        });
+      }
     } catch (err) {
       console.error("Analysis Error:", err);
     } finally {
       setLoading(false);
+      setAiLoading(false);
     }
   };
 
@@ -264,39 +308,18 @@ export default function App() {
         m5KlinesRef.current = m5;
 
         if (newPrice && m15.length > 0) {
-          const kd: KlineData = { m5, m15, h1, h4 };
-          const autoSig = computeSignal(newPrice, kd);
-          const autoSuggestions = computeSignals(newPrice, kd);
-
           const tfDirs: Record<string, TFDirection> = {};
           if (h4.length >= 52) tfDirs.H4 = analyzeTFDirection(h4, newPrice);
           if (h1.length >= 52) tfDirs.H1 = analyzeTFDirection(h1, newPrice);
           if (m15.length >= 52) tfDirs.M15 = analyzeTFDirection(m15, newPrice);
           if (m5.length >= 52) tfDirs.M5 = analyzeTFDirection(m5, newPrice);
 
-          const sigKey = `${autoSig.type}-${Math.round(parseFloat(autoSig.zone) / 50) * 50}`;
-
           setAnalysis(prev => ({
             ...prev,
             price: newPrice,
-            signal: {
-              type: autoSig.type, tier: autoSig.tier, confidence: autoSig.confidence,
-              zone: autoSig.zone, sl: autoSig.sl, tp1: autoSig.tp1, tp2: autoSig.tp2, rr: autoSig.rr
-            },
-            suggestions: autoSuggestions,
-            reasoning: autoSig.reasoning,
             tfDirections: tfDirs,
             session: getSessionInfo(),
-          } as MarketAnalysis));
-
-          if ((autoSig.type === 'BUY' || autoSig.type === 'SELL') && sigKey !== lastSignalKeyRef.current) {
-            lastSignalKeyRef.current = sigKey;
-            fireSmartAlert(autoSig.type as 'BUY'|'SELL', autoSig.zone, autoSig.confidence, autoSig.tier);
-            if (autoSig.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
-              addSignalToHistory({ type: autoSig.type as 'BUY'|'SELL', tier: autoSig.tier, confidence: autoSig.confidence, label: autoSig.label, zone: autoSig.zone, sl: autoSig.sl, tp1: autoSig.tp1, tp2: autoSig.tp2, rr: autoSig.rr });
-              setHistoryRefresh(prev => prev + 1);
-            }
-          }
+          }) as MarketAnalysis);
         }
       } catch (err) {}
     };
@@ -328,10 +351,18 @@ export default function App() {
             <div className="flex items-center justify-center gap-2">
               <span className="text-[10px] font-bold text-white/40 tracking-widest uppercase">Auto-redirecting in</span>
               <span className="w-5 h-5 flex items-center justify-center bg-bull/20 rounded border border-bull/30 text-bull font-mono text-xs font-bold">{countdown}s</span>
+              </div>
             </div>
           </div>
+
+          {/* Right: AI Live Chat Panel */}
+          <div className={`
+              ${mobileActiveTab === 'CHAT' ? 'col-span-12 flex' : 'hidden'}
+              lg:flex lg:col-span-3 flex-col h-full w-full
+            `}>
+            <AIChat apiKey={openRouterKey} model={openRouterModel} />
+          </div>
         </div>
-      </div>
     );
   }
 
@@ -366,9 +397,25 @@ export default function App() {
             disabled={loading}
             className="flex items-center gap-2 px-3 md:px-4 py-2 bg-bull hover:bg-bull/90 border border-bull rounded-md text-[10px] md:text-xs font-black text-black transition-all active:scale-95 disabled:opacity-50 shadow-[0_0_20px_rgba(0,255,136,0.4)]"
           >
-            {loading ? <RefreshCw size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <Zap size={12} className="md:w-3.5 md:h-3.5" />}
-            <span className="hidden sm:inline">{loading ? "SCANNING..." : "SCAN MARKET"}</span>
-            <span className="inline sm:hidden">{loading ? "SCAN" : "SCAN"}</span>
+            {aiLoading ? <RefreshCw size={12} className="animate-spin md:w-3.5 md:h-3.5" /> : <Bot size={12} className="md:w-3.5 md:h-3.5" />}
+            <span className="hidden sm:inline">{aiLoading ? "AI ANALYZING..." : openRouterKey ? "AI ANALYZE" : "SCAN MARKET"}</span>
+            <span className="inline sm:hidden">{aiLoading ? "AI" : openRouterKey ? "AI" : "SCAN"}</span>
+          </button>
+          {/* ── AI SETTINGS BUTTON ── */}
+          <button
+            onClick={() => setShowSettings(true)}
+            className={`relative flex items-center gap-1.5 px-3 py-2 border rounded-md text-[10px] font-black transition-all ${
+              openRouterKey
+                ? 'bg-accent/10 border-accent/30 text-accent hover:bg-accent/20 shadow-[0_0_10px_rgba(59,130,246,0.2)]'
+                : 'bg-white/5 hover:bg-white/10 border-trading-border text-slate-400 hover:text-white'
+            }`}
+            title="AI Configuration"
+          >
+            <Settings size={12} />
+            <span className="hidden sm:inline">AI SETUP</span>
+            {openRouterKey && (
+              <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-accent animate-pulse" />
+            )}
           </button>
           {/* ── PLOT LEVELS BUTTON ── */}
           {analysis && (
@@ -444,7 +491,7 @@ export default function App() {
           {/* Left: Chart Area */}
           <div className={`
               ${mobileActiveTab === 'CHART' ? 'col-span-12 flex' : 'hidden'} 
-              lg:flex lg:col-span-8 border-r border-trading-border flex-col relative h-full w-full
+              lg:flex lg:col-span-5 border-r border-trading-border flex-col relative h-full w-full
             `}>
             {/* Drawing Toolbar Toggle */}
             <button
@@ -696,15 +743,24 @@ export default function App() {
             })()}
 
             {/* ── ADVICE Section ─────────────────────────────── */}
-            <div className="mx-3 mb-3 rounded-xl border border-blue-500/20 bg-blue-500/5 overflow-hidden flex-shrink-0">
-              <div className="px-3 py-2 border-b border-white/5">
-                <span className="text-[10px] uppercase tracking-widest font-black opacity-50">🧠 MARKET ADVICE</span>
+            <div className="mx-3 mb-3 rounded-xl border border-accent/30 bg-accent/5 overflow-hidden flex-shrink-0">
+              <div className="px-3 py-2 border-b border-white/5 flex items-center justify-between">
+                <span className="text-[10px] uppercase tracking-widest font-black opacity-50">🧠 MARKET ANALYSIS {aiAnalysis ? '(AI-POWERED)' : '(OFFLINE)'}</span>
               </div>
               <div className="p-3 space-y-1.5">
                 {(() => {
-                  const advice = analysis?.suggestions?.find(s => s.isAdvice);
-                  const skip = analysis?.suggestions?.find(s => s.isSkip);
-                  if (!advice && !analysis) return <p className="text-slate-500 text-[10px]">Tunggu hasil pemindaian...</p>;
+                  if (!analysis) return <p className="text-slate-500 text-[10px]">Tunggu hasil pemindaian...</p>;
+                  if (aiAnalysis) {
+                    // AI analysis: render as markdown-like text with line breaks
+                    return aiAnalysis.marketAnalysis.split('\n').map((line, i) => (
+                      <p key={i} className="text-[10px] font-medium text-slate-300 leading-relaxed">
+                        {line || '\u00A0'}
+                      </p>
+                    ));
+                  }
+                  // Offline fallback
+                  const advice = analysis.suggestions?.find(s => s.isAdvice);
+                  const skip = analysis.suggestions?.find(s => s.isSkip);
                   return (
                     <>
                       {advice && advice.note.split('\n').map((line, i) => (
@@ -745,17 +801,37 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* Right: AI Live Chat Panel */}
+          <div className={`
+              ${mobileActiveTab === 'CHAT' ? 'col-span-12 flex' : 'hidden'}
+              lg:flex lg:col-span-3 flex-col h-full w-full min-h-0 overflow-hidden
+            `}>
+            <AIChat
+              apiKey={openRouterKey}
+              model={openRouterModel}
+              marketData={analysis ? {
+                price: analysis.price,
+                session: analysis.session,
+                tfDirections: analysis.tfDirections,
+                signal: analysis.signal,
+                suggestions: analysis.suggestions,
+                aiAnalysis,
+              } : null}
+            />
+          </div>
         </div>
 
         {/* Bottom Navigation for Mobile */}
         <nav className="h-16 bg-trading-panel border-t border-trading-border lg:hidden flex items-center justify-around px-4 z-[90] shadow-[0_-5px_15px_rgba(0,0,0,0.5)] flex-shrink-0">
           {[
             { id: 'SIGNAL', label: 'SIGNALS', icon: <Zap size={20} className={mobileActiveTab === 'SIGNAL' ? 'text-bull' : 'text-slate-500'} /> },
-            { id: 'CHART', label: 'CHART', icon: <TrendingUp size={20} className={mobileActiveTab === 'CHART' ? 'text-bull' : 'text-slate-500'} /> }
+            { id: 'CHART', label: 'CHART', icon: <TrendingUp size={20} className={mobileActiveTab === 'CHART' ? 'text-bull' : 'text-slate-500'} /> },
+            { id: 'CHAT', label: 'AI CHAT', icon: <Bot size={20} className={mobileActiveTab === 'CHAT' ? 'text-bull' : 'text-slate-500'} /> }
           ].map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setMobileActiveTab(tab.id as 'CHART' | 'SIGNAL')}
+              onClick={() => setMobileActiveTab(tab.id as 'CHART' | 'SIGNAL' | 'CHAT')}
               className={`flex flex-col items-center gap-1.5 w-16 transition-all duration-300
                 ${mobileActiveTab === tab.id ? 'scale-110' : 'scale-100 hover:scale-105'}
               `}
@@ -785,6 +861,23 @@ export default function App() {
       <AnimatePresence>
         {showHistory && (
           <HistoryPanel onClose={() => setShowHistory(false)} refreshTrigger={historyRefresh} />
+        )}
+      </AnimatePresence>
+
+      {/* AI Settings Modal */}
+      <AnimatePresence>
+        {showSettings && (
+          <SettingsModal
+            onClose={() => setShowSettings(false)}
+            apiKey={openRouterKey}
+            model={openRouterModel}
+            onSave={(key, mdl) => {
+              setOpenRouterKey(key);
+              setOpenRouterModel(mdl);
+              localStorage.setItem('omega_openrouter_key', key);
+              localStorage.setItem('omega_openrouter_model', mdl);
+            }}
+          />
         )}
       </AnimatePresence>
     </div>
