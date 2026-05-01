@@ -1,7 +1,14 @@
-// Signal Engine v2.1 — Pure Price Action & Structure (Robust Version)
-// Logic: Breakouts (Trendline) + Rejections (Horizontal) + Pattern Compression
+// Signal Engine v3.0 — Data-Driven Price Action Engine
+// Logic: Breakouts + Rejections + ATR SL/TP + Volume + Multi-TF + Candle Patterns + Session
+// ATURAN UTAMA: Signal SELALU tampil. Filter hanya ubah confidence, bukan hapus signal.
 
 import { analyzeMarketStructure } from './levelEngine';
+import {
+  calculateATR, analyzeVolume, detectCandlePattern,
+  getSessionInfo, calculateConfluence,
+  type VolumeInfo, type CandlePattern, type SessionInfo, type ConfluenceResult
+} from './analysisUtils';
+import { ENGINE_CONFIG } from '../constants';
 
 export interface SignalResult {
   type: "BUY" | "SELL" | "WAIT";
@@ -19,165 +26,297 @@ export interface SignalResult {
   isAdvice?: boolean;
 }
 
-// Default Fallback Signal
-const DEFAULT_SIGNAL: SignalResult = {
-  type: "WAIT", tier: 0, label: "ANALYZING...",
-  note: "Menunggu data pasar...",
-  reasoning: "Sistem sedang memproses struktur market M15/H1.",
-  confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---",
-  isAdvice: true
-};
-
-function checkRejection(candle: any, type: "RES" | "SUP"): boolean {
-  if (!candle || !Array.isArray(candle)) return false;
-  const high = parseFloat(candle[2]);
-  const low = parseFloat(candle[3]);
-  const open = parseFloat(candle[1]);
-  const close = parseFloat(candle[4]);
-  if (isNaN(high) || isNaN(low)) return false;
-
-  const bodySize = Math.abs(open - close);
-  if (type === "RES") {
-    const upperWick = high - Math.max(open, close);
-    return upperWick > bodySize * 1.5;
-  } else {
-    const lowerWick = Math.min(open, close) - low;
-    return lowerWick > bodySize * 1.5;
-  }
+export interface KlineData {
+  m5: any[];
+  m15: any[];
+  h1: any[];
+  h4: any[];
 }
 
-export function computeSignals(currentPrice: number, h1Klines: any[], m15Klines: any[]): SignalResult[] {
-  const suggestions: SignalResult[] = [];
-  
-  if (!m15Klines || m15Klines.length < 50 || !h1Klines || h1Klines.length < 20) return [DEFAULT_SIGNAL];
+// ── Helpers ───────────────────────────────────────────────────────────
 
-  const structure = analyzeMarketStructure(m15Klines, currentPrice);
-  const lastCandle = m15Klines[m15Klines.length - 1];
-  
-  // Deteksi Lokal Tren dari H1 (20 candle terakhir = ~1 hari)
-  const h1Recent = h1Klines.slice(-20);
-  const h1Highs = h1Recent.map(k => parseFloat(k[2]));
-  const h1Lows = h1Recent.map(k => parseFloat(k[3]));
+function clampConfidence(c: number): number {
+  return Math.max(10, Math.min(ENGINE_CONFIG.maxConfidence, Math.round(c)));
+}
+
+function calcRR(entry: number, sl: number, tp: number): string {
+  const risk = Math.abs(entry - sl);
+  if (risk === 0) return "---";
+  const reward = Math.abs(tp - entry);
+  return `1:${(reward / risk).toFixed(1)}`;
+}
+
+function capATR(atr: number, price: number): number {
+  const maxATR = price * (ENGINE_CONFIG.atrMaxPct / 100);
+  return Math.min(atr, maxATR);
+}
+
+// ── Main Signal Computation ───────────────────────────────────────────
+
+export function computeSignals(currentPrice: number, klineData: KlineData): SignalResult[] {
+  const suggestions: SignalResult[] = [];
+  const { m5, m15, h1, h4 } = klineData;
+
+  // Guard: minimal M15 + H1 harus ada
+  if (!m15 || m15.length < 50 || !h1 || h1.length < 20) {
+    return [
+      { type: "WAIT", tier: 1, label: "MENUNGGU DATA...", note: "Data M15/H1 belum cukup.", reasoning: "Sistem butuh minimal 50 candle M15 dan 20 candle H1.", confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---", isAdvice: true },
+    ];
+  }
+
+  // ── Hitung semua analisis ────────────────────────────────────────
+  const structure = analyzeMarketStructure(m15, currentPrice);
+  const atrM15 = capATR(calculateATR(m15, ENGINE_CONFIG.atrPeriod), currentPrice);
+  const atrH1 = capATR(calculateATR(h1, ENGINE_CONFIG.atrPeriod), currentPrice);
+  const volume = analyzeVolume(m15);
+  const pattern = detectCandlePattern(m15);
+  const session = getSessionInfo();
+
+  // Multi-TF confluence (pakai data yang tersedia)
+  const tfData: Record<string, any[]> = {};
+  if (h4 && h4.length >= 52) tfData.h4 = h4;
+  if (h1 && h1.length >= 52) tfData.h1 = h1;
+  if (m15 && m15.length >= 52) tfData.m15 = m15;
+  if (m5 && m5.length >= 52) tfData.m5 = m5;
+
+  const confluence = Object.keys(tfData).length >= 2
+    ? calculateConfluence(tfData, currentPrice)
+    : null;
+
+  const localTrend = confluence?.dominantTrend ?? "SIDEWAYS";
+
+  // ── Deteksi Lokal H1 Range ──────────────────────────────────────
+  const h1Recent = h1.slice(-20);
+  const h1Highs = h1Recent.map((k: any) => parseFloat(k[2]));
+  const h1Lows = h1Recent.map((k: any) => parseFloat(k[3]));
   const h1Highest = Math.max(...h1Highs);
   const h1Lowest = Math.min(...h1Lows);
-  const h1Mid = (h1Highest + h1Lowest) / 2;
-  
-  const localTrend: "UP" | "DOWN" | "SIDEWAYS" = currentPrice > h1Mid * 1.002 ? "UP" : currentPrice < h1Mid * 0.998 ? "DOWN" : "SIDEWAYS";
 
-  // 1. PRIMARY ENTRY (Tier 1) - Extreme H1 Levels or Explosive Breakout
+  // ── Helper: Apply modifiers ke confidence ───────────────────────
+  function applyModifiers(baseConf: number, signalDir: "BUY" | "SELL"): { confidence: number; modNotes: string[] } {
+    let conf = baseConf;
+    const notes: string[] = [];
+
+    // Volume modifier
+    if (volume.label === "SPIKE") { conf += 12; notes.push(`Vol SPIKE (${volume.volumeRatio.toFixed(1)}x)`); }
+    else if (volume.label === "HIGH") { conf += 6; notes.push(`Vol HIGH (${volume.volumeRatio.toFixed(1)}x)`); }
+    else if (volume.label === "LOW") { conf -= 10; notes.push(`Vol LOW ⚠️`); }
+
+    // Confluence modifier
+    if (confluence) {
+      conf += confluence.confidenceBonus;
+      const aligned = Math.max(confluence.bullCount, confluence.bearCount);
+      notes.push(`TF ${aligned}/4 aligned`);
+    }
+
+    // Pattern modifier
+    if (pattern) {
+      const patDir = pattern.direction === "BULL" ? "BUY" : pattern.direction === "BEAR" ? "SELL" : null;
+      if (patDir === signalDir && pattern.strength === 3) { conf += 10; notes.push(`${pattern.pattern} ✓`); }
+      else if (patDir === signalDir && pattern.strength === 2) { conf += 5; notes.push(`${pattern.pattern}`); }
+      else if (patDir && patDir !== signalDir && pattern.strength >= 2) { conf -= 8; notes.push(`${pattern.pattern} berlawanan ⚠️`); }
+    }
+
+    // Session modifier (multiply, bukan add — supaya efeknya proporsional)
+    conf = conf * session.volatilityFactor;
+    notes.push(session.label);
+
+    return { confidence: clampConfidence(conf), modNotes: notes };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 1. TIER 1: PRIMARY ENTRY (Swing Extreme atau Explosive Breakout)
+  // ═══════════════════════════════════════════════════════════════════
   let primaryAdded = false;
-  
-  // Cek Breakout dulu (Hanya jika benar-benar baru terjadi / FRESH Breakout)
+
+  // Cek Breakout — Pattern compression + harga menembus garis
   if (structure.pattern && structure.pattern.type !== "NONE" && structure.pattern.upperLine && structure.pattern.lowerLine) {
     const upper = structure.pattern.upperLine;
     const lower = structure.pattern.lowerLine;
-    
+
     if (structure.pattern.compressionPct > 20) {
       const distUpper = (Math.abs(currentPrice - upper.currentValue) / currentPrice) * 100;
       const distLower = (Math.abs(currentPrice - lower.currentValue) / currentPrice) * 100;
 
-      // Harus fresh breakout (harga tidak boleh lari terlalu jauh, maks 0.15% dari garis)
       if (currentPrice > upper.currentValue && distUpper < 0.15) {
-        const slDist = currentPrice * 0.002; // 0.2% SL
+        const slDist = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.breakout : currentPrice * 0.002;
+        const entry = currentPrice;
+        const sl = entry - slDist;
+        const tp1 = entry + slDist * 2;
+        const tp2 = entry + slDist * 4;
+
+        const baseConf = 75;
+        const { confidence, modNotes } = applyModifiers(baseConf, "BUY");
+
         suggestions.push({
-          type: "BUY", tier: 1, label: `EXPLOSIVE ${structure.pattern.type} BREAKOUT`,
-          note: "Breakout Atas terkonfirmasi! Eksekusi Market.",
-          reasoning: `Harga memotong garis tren diagonal di ${Math.round(upper.currentValue)}. Compression: ${structure.pattern.compressionPct.toFixed(0)}%.`,
-          confidence: 88, zone: currentPrice.toFixed(1),
-          sl: (currentPrice - slDist).toFixed(1),
-          tp1: (currentPrice + slDist * 2).toFixed(1),
-          tp2: (currentPrice + slDist * 4).toFixed(1),
-          rr: "1:4.0",
-          dist: distUpper
+          type: "BUY", tier: 1,
+          label: `EXPLOSIVE ${structure.pattern.type} BREAKOUT`,
+          note: confidence >= 70 ? "Breakout Atas terkonfirmasi! Eksekusi Market." : "Breakout terdeteksi, tapi konfirmasi lemah. Hati-hati.",
+          reasoning: `Harga memotong diagonal ${Math.round(upper.currentValue)}. Compression ${structure.pattern.compressionPct.toFixed(0)}%. | ${modNotes.join(' | ')}`,
+          confidence, zone: entry.toFixed(1),
+          sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
+          rr: calcRR(entry, sl, tp2)
         });
         primaryAdded = true;
       } else if (currentPrice < lower.currentValue && distLower < 0.15) {
-        const slDist = currentPrice * 0.002;
+        const slDist = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.breakout : currentPrice * 0.002;
+        const entry = currentPrice;
+        const sl = entry + slDist;
+        const tp1 = entry - slDist * 2;
+        const tp2 = entry - slDist * 4;
+
+        const baseConf = 75;
+        const { confidence, modNotes } = applyModifiers(baseConf, "SELL");
+
         suggestions.push({
-          type: "SELL", tier: 1, label: `EXPLOSIVE ${structure.pattern.type} BREAKOUT`,
-          note: "Breakout Bawah terkonfirmasi! Eksekusi Market.",
-          reasoning: `Harga memotong garis tren diagonal di ${Math.round(lower.currentValue)}. Compression: ${structure.pattern.compressionPct.toFixed(0)}%.`,
-          confidence: 88, zone: currentPrice.toFixed(1),
-          sl: (currentPrice + slDist).toFixed(1),
-          tp1: (currentPrice - slDist * 2).toFixed(1),
-          tp2: (currentPrice - slDist * 4).toFixed(1),
-          rr: "1:4.0",
-          dist: distLower
+          type: "SELL", tier: 1,
+          label: `EXPLOSIVE ${structure.pattern.type} BREAKOUT`,
+          note: confidence >= 70 ? "Breakout Bawah terkonfirmasi! Eksekusi Market." : "Breakout terdeteksi, konfirmasi lemah. Hati-hati.",
+          reasoning: `Harga memotong diagonal ${Math.round(lower.currentValue)}. Compression ${structure.pattern.compressionPct.toFixed(0)}%. | ${modNotes.join(' | ')}`,
+          confidence, zone: entry.toFixed(1),
+          sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
+          rr: calcRR(entry, sl, tp2)
         });
         primaryAdded = true;
       }
     }
   }
 
-  // Jika tidak ada breakout, buat Primary Entry berbasis Swing Limit di ekstrem
+  // Jika tidak ada breakout → Swing Limit di H1 extreme (SELALU tampil)
   if (!primaryAdded) {
-    const type = localTrend === "DOWN" ? "BUY" : "SELL"; // Swing melawan ekstrem
+    const type: "BUY" | "SELL" = localTrend === "DOWN" ? "BUY" : "SELL";
     const entry = type === "BUY" ? h1Lowest : h1Highest;
-    const slDist = entry * 0.003; // 0.3% SL untuk swing
+    const slDist = atrH1 > 0 ? atrH1 * ENGINE_CONFIG.atrMultiplier.swing : entry * 0.003;
+    const sl = type === "BUY" ? entry - slDist : entry + slDist;
+    const tp1 = type === "BUY" ? entry + slDist * 3 : entry - slDist * 3;
+    const tp2 = type === "BUY" ? entry + slDist * 6 : entry - slDist * 6;
+
+    const baseConf = 72;
+    const { confidence, modNotes } = applyModifiers(baseConf, type);
+
     suggestions.push({
-      type: type, tier: 1, label: `PRIMARY SWING LIMIT @ ${Math.round(entry)}`,
+      type, tier: 1,
+      label: `PRIMARY SWING LIMIT @ ${Math.round(entry)}`,
       note: "Posisi swing utama. Pasang jaring di ekstrem struktur H1.",
-      reasoning: `Harga ekstrem H1 (${localTrend} trend). Reversal probabilitas tinggi.`,
-      confidence: 90, zone: entry.toFixed(1),
-      sl: (type === "BUY" ? entry - slDist : entry + slDist).toFixed(1),
-      tp1: (type === "BUY" ? entry + slDist * 3 : entry - slDist * 3).toFixed(1),
-      tp2: (type === "BUY" ? entry + slDist * 6 : entry - slDist * 6).toFixed(1),
-      rr: "1:6.0",
-      dist: 0 // Priority
+      reasoning: `Harga ekstrem H1 (tren ${localTrend}). ATR H1: $${Math.round(atrH1)}. | ${modNotes.join(' | ')}`,
+      confidence, zone: entry.toFixed(1),
+      sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
+      rr: calcRR(entry, sl, tp2)
     });
   }
 
-  // 2. SCALP LOGIC (Tier 2: Searah, Tier 3: Counter)
-  if (structure.levels) {
-    structure.levels.forEach(lvl => {
+  // ═══════════════════════════════════════════════════════════════════
+  // 2. TIER 2 & 3: SCALP (Searah & Counter Tren)
+  // ═══════════════════════════════════════════════════════════════════
+  let tier2Added = false;
+  let tier3Added = false;
+
+  if (structure.levels && structure.levels.length > 0) {
+    // Sort levels by distance to current price (closest first)
+    const sortedLevels = [...structure.levels].sort(
+      (a, b) => Math.abs(currentPrice - a.price) - Math.abs(currentPrice - b.price)
+    );
+
+    for (const lvl of sortedLevels) {
       const exactEntry = lvl.price;
       const distPct = (Math.abs(currentPrice - exactEntry) / currentPrice) * 100;
-      
-      // Hanya masukkan ke suggestion jika jaraknya masuk akal untuk dipantau (misal < 0.4%)
-      if (distPct < 0.4) {
-        const type = lvl.type === "SUPPORT" ? "BUY" : "SELL";
-        
-        let tier = 3; // Default Counter
-        if (localTrend === "UP" && type === "BUY") tier = 2; // Buy support di uptrend
-        if (localTrend === "DOWN" && type === "SELL") tier = 2; // Sell resistance di downtrend
-        if (localTrend === "SIDEWAYS") tier = 2; // Sideways = bebas scalp atas bawah
 
-        const slDist = exactEntry * 0.0015; // Sangat ketat (0.15%)
-        
-        const sl = type === "BUY" ? exactEntry - slDist : exactEntry + slDist;
-        const tp1 = type === "BUY" ? exactEntry + slDist * 2 : exactEntry - slDist * 2;
-        const tp2 = type === "BUY" ? exactEntry + slDist * 3 : exactEntry - slDist * 3;
+      if (distPct > 0.5) continue; // Diperlebar dari 0.4% supaya lebih banyak signal
 
-        const isReject = checkRejection(lastCandle, lvl.type === "SUPPORT" ? "SUP" : "RES");
+      const type: "BUY" | "SELL" = lvl.type === "SUPPORT" ? "BUY" : "SELL";
 
-        suggestions.push({
-          type: type,
-          tier: tier,
-          label: `LIMIT SCALP @ ${Math.round(exactEntry)}`,
-          note: isReject && distPct <= 0.2 ? "Rejection terlihat. Jaring sekarang!" : "Pasang Limit Order di S/R.",
-          reasoning: `Pantulan ${tier === 2 ? 'searah' : 'counter'} tren. Jarak: ${distPct.toFixed(2)}%.`,
-          confidence: distPct <= 0.2 ? (isReject ? 85 : 75) : 60, // Confidence turun jika jauh
-          zone: exactEntry.toFixed(1),
-          sl: sl.toFixed(1),
-          tp1: tp1.toFixed(1),
-          tp2: tp2.toFixed(1),
-          rr: "1:3.0",
-          dist: distPct
-        });
-      }
+      let tier = 3;
+      if (localTrend === "UP" && type === "BUY") tier = 2;
+      if (localTrend === "DOWN" && type === "SELL") tier = 2;
+      if (localTrend === "SIDEWAYS") tier = 2;
+
+      // Skip jika tier ini sudah ada (ambil yang terdekat saja)
+      if (tier === 2 && tier2Added) continue;
+      if (tier === 3 && tier3Added) continue;
+
+      const slDist = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.scalp : exactEntry * 0.0015;
+      const sl = type === "BUY" ? exactEntry - slDist : exactEntry + slDist;
+      const tp1 = type === "BUY" ? exactEntry + slDist * 2 : exactEntry - slDist * 2;
+      const tp2 = type === "BUY" ? exactEntry + slDist * 3.5 : exactEntry - slDist * 3.5;
+
+      // Base confidence berdasarkan jarak
+      let baseConf = 65;
+      if (distPct <= 0.1) baseConf = 78;
+      else if (distPct <= 0.2) baseConf = 72;
+      else if (distPct <= 0.35) baseConf = 65;
+      else baseConf = 55;
+
+      const { confidence, modNotes } = applyModifiers(baseConf, type);
+
+      suggestions.push({
+        type, tier,
+        label: `LIMIT SCALP @ ${Math.round(exactEntry)}`,
+        note: confidence >= 70
+          ? (distPct <= 0.15 ? "Harga sangat dekat! Jaring sekarang." : "Pasang Limit Order di S/R.")
+          : "Pantau level ini. Konfirmasi masih lemah.",
+        reasoning: `Pantulan ${tier === 2 ? 'searah' : 'counter'} tren. Jarak: ${distPct.toFixed(2)}%. ATR M15: $${Math.round(atrM15)}. | ${modNotes.join(' | ')}`,
+        confidence, zone: exactEntry.toFixed(1),
+        sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
+        rr: calcRR(exactEntry, sl, tp2)
+      });
+
+      if (tier === 2) tier2Added = true;
+      if (tier === 3) tier3Added = true;
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // SAFEGUARD: Jika Tier 2 atau Tier 3 kosong, buat fallback
+  // App TIDAK BOLEH "gagu" — selalu tampilkan sesuatu
+  // ═══════════════════════════════════════════════════════════════════
+  if (!tier2Added) {
+    const type: "BUY" | "SELL" = localTrend === "UP" ? "BUY" : localTrend === "DOWN" ? "SELL" : "BUY";
+    suggestions.push({
+      type: "WAIT", tier: 2,
+      label: "MENUNGGU LEVEL TERDEKAT",
+      note: `Menunggu harga mendekati Support/Resistance searah tren (${localTrend}).`,
+      reasoning: `Tidak ada S/R dalam radius 0.5% dari harga saat ini. ${session.label}`,
+      confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---"
     });
   }
 
-  if (suggestions.length === 0) suggestions.push(DEFAULT_SIGNAL);
-  
-  // Sort by distance first so the closest level is picked, then by tier
+  if (!tier3Added) {
+    suggestions.push({
+      type: "WAIT", tier: 3,
+      label: "MENUNGGU PELUANG COUNTER",
+      note: "Menunggu harga menyentuh level counter-tren untuk scalp pantulan.",
+      reasoning: `Tidak ada level counter dalam jangkauan. ${session.label}`,
+      confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---"
+    });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // ADVICE: Ringkasan kondisi market (SELALU tampil)
+  // ═══════════════════════════════════════════════════════════════════
+  const adviceLines: string[] = [];
+  adviceLines.push(`📊 Tren Dominan: ${localTrend}${confluence ? ` (${Math.max(confluence.bullCount, confluence.bearCount)}/4 TF aligned)` : ''}`);
+  adviceLines.push(`📈 Volume: ${volume.label} (${volume.volumeRatio.toFixed(1)}x avg)`);
+  if (pattern) adviceLines.push(`🕯️ Candle: ${pattern.pattern} (${pattern.direction}, strength ${pattern.strength})`);
+  adviceLines.push(`⏰ Sesi: ${session.label}`);
+  adviceLines.push(`📐 ATR M15: $${Math.round(atrM15)} | ATR H1: $${Math.round(atrH1)}`);
+
+  suggestions.push({
+    type: "WAIT", tier: 99,
+    label: "MARKET OVERVIEW",
+    note: adviceLines.join('\n'),
+    reasoning: "",
+    confidence: 0, zone: "---", sl: "---", tp1: "---", tp2: "---", rr: "---",
+    isAdvice: true
+  });
+
+  // Sort: tier ascending, lalu distance
   return suggestions.sort((a, b) => {
     if (a.tier !== b.tier) return a.tier - b.tier;
-    return (a as any).dist - (b as any).dist;
+    return 0;
   });
 }
 
-export function computeSignal(currentPrice: number, h1Klines: any[], m15Klines: any[]): SignalResult {
-  const sigs = computeSignals(currentPrice, h1Klines, m15Klines);
-  return sigs.find(s => s.tier > 0) || DEFAULT_SIGNAL;
+export function computeSignal(currentPrice: number, klineData: KlineData): SignalResult {
+  const sigs = computeSignals(currentPrice, klineData);
+  return sigs.find(s => s.tier > 0 && s.tier < 99 && s.type !== "WAIT") || sigs[0];
 }

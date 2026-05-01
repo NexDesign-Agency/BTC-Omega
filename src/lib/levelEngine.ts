@@ -25,7 +25,7 @@ export interface MarketPattern {
 }
 
 // ── Pivot Detection (Fondasi untuk semua garis) ───────────────────────
-function findPivots(highs: number[], lows: number[], window = 5): { ph: {p:number, i:number}[], pl: {p:number, i:number}[] } {
+export function findPivots(highs: number[], lows: number[], window = 5): { ph: {p:number, i:number}[], pl: {p:number, i:number}[] } {
   const ph: {p:number, i:number}[] = [];
   const pl: {p:number, i:number}[] = [];
   for (let i = window; i < highs.length - window; i++) {

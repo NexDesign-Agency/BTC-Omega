@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { computeSignal, computeSignals, SignalResult } from "./lib/signalEngine";
+import { computeSignal, computeSignals, SignalResult, KlineData } from "./lib/signalEngine";
 import { getAlertLevel, playAlertSound, speakSmartAlert } from "./lib/alertEngine";
 import { addSignalToHistory, loadHistory, calcWinRate } from "./lib/historyEngine";
+import { analyzeTFDirection, getSessionInfo, type TFDirection, type SessionInfo } from "./lib/analysisUtils";
+import { ENGINE_CONFIG } from "./constants";
 import HistoryPanel from "./components/HistoryPanel";
 import {
   TrendingUp,
@@ -83,6 +85,8 @@ interface MarketAnalysis {
   };
   suggestions: SignalResult[];
   reasoning: string;
+  tfDirections?: Record<string, TFDirection>;
+  session?: SessionInfo;
 }
 
 export default function App() {
@@ -97,8 +101,10 @@ export default function App() {
   const [historyRefresh, setHistoryRefresh] = useState(0);
   const [quickWinRate, setQuickWinRate] = useState<number | null>(null);
 
+  const h4KlinesRef = useRef<any[]>([]);
   const h1KlinesRef = useRef<any[]>([]);
   const m15KlinesRef = useRef<any[]>([]);
+  const m5KlinesRef = useRef<any[]>([]);
   const lastSignalKeyRef = useRef<string>("");
 
   useTradingView("tv_chart_container", !showSplash, !showChartToolbar);
@@ -134,38 +140,44 @@ export default function App() {
     setLoading(true);
     try {
       let currentPrice = 0;
-      let h1RawKlines: any[] = [];
-      let m15RawKlines: any[] = [];
+      let h4Raw: any[] = [], h1Raw: any[] = [], m15Raw: any[] = [], m5Raw: any[] = [];
 
       try {
         const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
         if (binanceRes.ok) {
-          const binanceData = await binanceRes.json();
-          currentPrice = parseFloat(binanceData.lastPrice);
+          const d = await binanceRes.json();
+          currentPrice = parseFloat(d.lastPrice);
         }
 
         const fetchTF = async (interval: string) => {
           const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`);
-          if (res.ok) {
-            const klines = await res.json();
-            if (interval === '1h') h1RawKlines = klines;
-            if (interval === '15m') m15RawKlines = klines;
-          }
+          if (res.ok) return await res.json();
+          return [];
         };
 
-        await Promise.all([
-          fetchTF('15m'),
-          fetchTF('1h')
+        [m5Raw, m15Raw, h1Raw, h4Raw] = await Promise.all([
+          fetchTF('5m'), fetchTF('15m'), fetchTF('1h'), fetchTF('4h')
         ]);
       } catch (e) {
         console.warn("Failed to fetch from Binance", e);
       }
 
-      h1KlinesRef.current = h1RawKlines;
-      m15KlinesRef.current = m15RawKlines;
+      h4KlinesRef.current = h4Raw;
+      h1KlinesRef.current = h1Raw;
+      m15KlinesRef.current = m15Raw;
+      m5KlinesRef.current = m5Raw;
 
-      const sig = computeSignal(currentPrice, h1RawKlines, m15RawKlines);
-      const allSuggestions = computeSignals(currentPrice, h1RawKlines, m15RawKlines);
+      const kd: KlineData = { m5: m5Raw, m15: m15Raw, h1: h1Raw, h4: h4Raw };
+      const sig = computeSignal(currentPrice, kd);
+      const allSuggestions = computeSignals(currentPrice, kd);
+
+      // TF directions for strip
+      const tfDirs: Record<string, TFDirection> = {};
+      if (h4Raw.length >= 52) tfDirs.H4 = analyzeTFDirection(h4Raw, currentPrice);
+      if (h1Raw.length >= 52) tfDirs.H1 = analyzeTFDirection(h1Raw, currentPrice);
+      if (m15Raw.length >= 52) tfDirs.M15 = analyzeTFDirection(m15Raw, currentPrice);
+      if (m5Raw.length >= 52) tfDirs.M5 = analyzeTFDirection(m5Raw, currentPrice);
+      const session = getSessionInfo();
 
       setAnalysis({
         price: currentPrice,
@@ -174,7 +186,9 @@ export default function App() {
           zone: sig.zone, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, rr: sig.rr
         },
         suggestions: allSuggestions,
-        reasoning: sig.reasoning
+        reasoning: sig.reasoning,
+        tfDirections: tfDirs,
+        session
       });
       setHighlightTrigger(prev => prev + 1);
 
@@ -182,7 +196,7 @@ export default function App() {
       if ((sig.type === 'BUY' || sig.type === 'SELL') && sigKey !== lastSignalKeyRef.current) {
         lastSignalKeyRef.current = sigKey;
         fireSmartAlert(sig.type as 'BUY'|'SELL', sig.zone, sig.confidence, sig.tier);
-        if (sig.confidence >= 75) {
+        if (sig.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
           addSignalToHistory({ type: sig.type as 'BUY'|'SELL', tier: sig.tier, confidence: sig.confidence, label: sig.label, zone: sig.zone, sl: sig.sl, tp1: sig.tp1, tp2: sig.tp2, rr: sig.rr });
           setHistoryRefresh(prev => prev + 1);
           setQuickWinRate(calcWinRate(loadHistory()).winRate || null);
@@ -203,27 +217,37 @@ export default function App() {
         const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
         let newPrice = 0;
         if (binanceRes.ok) {
-          const binanceData = await binanceRes.json();
-          newPrice = parseFloat(binanceData.lastPrice);
+          const d = await binanceRes.json();
+          newPrice = parseFloat(d.lastPrice);
         }
 
         const fetchTF = async (interval: string) => {
           const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${interval}&limit=150`);
-          if (res.ok) {
-            const klines = await res.json();
-            if (interval === '1h') h1KlinesRef.current = klines;
-            if (interval === '15m') m15KlinesRef.current = klines;
-          }
+          if (res.ok) return await res.json();
+          return [];
         };
 
-        await Promise.all([fetchTF('15m'), fetchTF('1h')]);
+        const [m5, m15, h1, h4] = await Promise.all([
+          fetchTF('5m'), fetchTF('15m'), fetchTF('1h'), fetchTF('4h')
+        ]);
+        h4KlinesRef.current = h4;
+        h1KlinesRef.current = h1;
+        m15KlinesRef.current = m15;
+        m5KlinesRef.current = m5;
 
-        if (newPrice && m15KlinesRef.current.length > 0) {
-          const autoSig = computeSignal(newPrice, h1KlinesRef.current, m15KlinesRef.current);
-          const autoSuggestions = computeSignals(newPrice, h1KlinesRef.current, m15KlinesRef.current);
-          
+        if (newPrice && m15.length > 0) {
+          const kd: KlineData = { m5, m15, h1, h4 };
+          const autoSig = computeSignal(newPrice, kd);
+          const autoSuggestions = computeSignals(newPrice, kd);
+
+          const tfDirs: Record<string, TFDirection> = {};
+          if (h4.length >= 52) tfDirs.H4 = analyzeTFDirection(h4, newPrice);
+          if (h1.length >= 52) tfDirs.H1 = analyzeTFDirection(h1, newPrice);
+          if (m15.length >= 52) tfDirs.M15 = analyzeTFDirection(m15, newPrice);
+          if (m5.length >= 52) tfDirs.M5 = analyzeTFDirection(m5, newPrice);
+
           const sigKey = `${autoSig.type}-${Math.round(parseFloat(autoSig.zone) / 50) * 50}`;
-          
+
           setAnalysis(prev => ({
             ...prev,
             price: newPrice,
@@ -233,12 +257,14 @@ export default function App() {
             },
             suggestions: autoSuggestions,
             reasoning: autoSig.reasoning,
+            tfDirections: tfDirs,
+            session: getSessionInfo(),
           } as MarketAnalysis));
 
           if ((autoSig.type === 'BUY' || autoSig.type === 'SELL') && sigKey !== lastSignalKeyRef.current) {
             lastSignalKeyRef.current = sigKey;
             fireSmartAlert(autoSig.type as 'BUY'|'SELL', autoSig.zone, autoSig.confidence, autoSig.tier);
-            if (autoSig.confidence >= 75) {
+            if (autoSig.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
               addSignalToHistory({ type: autoSig.type as 'BUY'|'SELL', tier: autoSig.tier, confidence: autoSig.confidence, label: autoSig.label, zone: autoSig.zone, sl: autoSig.sl, tp1: autoSig.tp1, tp2: autoSig.tp2, rr: autoSig.rr });
               setHistoryRefresh(prev => prev + 1);
             }
@@ -330,6 +356,33 @@ export default function App() {
 
       {/* Main Dashboard Layout */}
       <main className="flex-1 flex flex-col overflow-hidden relative">
+
+        {/* ── TF Indicator Strip + Session Badge ──────────────── */}
+        <div className="h-[52px] border-b border-trading-border flex items-stretch bg-trading-panel/30 flex-shrink-0 overflow-x-auto no-scrollbar">
+          {['H4','H1','M15','M5'].map(tf => {
+            const dir = analysis?.tfDirections?.[tf];
+            const dirLabel = dir?.direction ?? '...';
+            const strength = dir?.strength ?? 0;
+            const trendColor = dirLabel === 'UP' ? 'text-bull' : dirLabel === 'DOWN' ? 'text-bear' : 'text-warning';
+            return (
+              <div key={tf} className="min-w-[120px] flex-1 px-3 py-1.5 border-r border-trading-border flex flex-col justify-center">
+                <div className="flex justify-between items-center">
+                  <span className="text-[9px] font-bold text-slate-500 bg-slate-800 px-1.5 py-0.5 rounded tracking-widest">{tf}</span>
+                  <span className="text-[8px] font-mono text-slate-600">{strength > 0 ? `${strength}%` : ''}</span>
+                </div>
+                <p className={`text-[11px] font-black tracking-tight mt-0.5 ${trendColor}`}>
+                  {dirLabel === 'UP' ? '▲ BULLISH' : dirLabel === 'DOWN' ? '▼ BEARISH' : '◆ SIDEWAYS'}
+                </p>
+              </div>
+            );
+          })}
+          {/* Session Badge */}
+          <div className="min-w-[140px] px-3 py-1.5 flex flex-col justify-center bg-black/20">
+            <span className="text-[8px] font-bold text-slate-600 tracking-widest">SESSION</span>
+            <p className="text-[10px] font-black text-white/80 mt-0.5">{analysis?.session?.label ?? '...'}</p>
+          </div>
+        </div>
+
         {/* Dynamic Content Area */}
         <div className="flex-1 grid grid-cols-12 overflow-hidden relative">
           {/* Left: Chart Area */}
@@ -348,9 +401,6 @@ export default function App() {
 
             {/* TRADING VIEW CHART CONTAINER */}
             <div className="flex-1 w-full bg-trading-bg relative overflow-hidden">
-              <div id="tv_chart_container" className="h-full w-full" />
-
-              {/* TradingView Chart Frame */}
               <div id="tv_chart_container" className="h-full w-full" />
             </div>
           </div>

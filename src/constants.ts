@@ -1,3 +1,27 @@
+// ── Signal Engine v3.0 Config (Tuneable) ──────────────────────────────
+export const ENGINE_CONFIG = {
+  // ATR
+  atrPeriod: 14,
+  atrMaxPct: 2, // Max ATR sebagai % dari harga (cap saat flash crash)
+  atrMultiplier: {
+    breakout: 1.5,  // SL = ATR × 1.5
+    swing: 2.0,     // SL = ATR × 2.0 (lebih lebar untuk swing)
+    scalp: 0.8,     // SL = ATR × 0.8 (ketat untuk scalp)
+  },
+
+  // Confidence
+  maxConfidence: 98,
+  minConfidenceForAlert: 75,  // Voice/beep hanya di atas ini
+  minConfidenceForRecord: 60, // History record threshold
+
+  // Volume
+  volumeAvgPeriod: 20,
+  volumeSpikeThreshold: 1.5,
+
+  // Scalp distance
+  scalpMaxDistPct: 0.5, // Max jarak S/R untuk scalp (% dari harga)
+};
+
 export const BTC_ANALYST_SYSTEM_PROMPT = `Kamu adalah trader profesional spesialis BTCUSD dengan pengalaman 10+ tahun di crypto dan CFD trading. Kamu menguasai price action, multi-timeframe analysis, Smart Money Concepts, dan manajemen risiko ketat.
 
 User trading BTCUSD via CFD di MT5 (broker XM Micro Account) dengan modal kecil. Fokus: scalping dan swing trade timeframe 15 menit hingga 4 jam.
