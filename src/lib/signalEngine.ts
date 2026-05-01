@@ -139,11 +139,11 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
     const upper = structureM15.pattern.upperLine;
     const lower = structureM15.pattern.lowerLine;
 
-    if (structureM15.pattern.compressionPct > 20) {
+    if (structureM15.pattern.compressionPct > 35) {
       const distUpper = (Math.abs(currentPrice - upper.currentValue) / currentPrice) * 100;
       const distLower = (Math.abs(currentPrice - lower.currentValue) / currentPrice) * 100;
 
-      if (currentPrice > upper.currentValue && distUpper < 0.15) {
+      if (currentPrice > upper.currentValue && distUpper < 0.5) {
         const slDist = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.breakout : currentPrice * 0.002;
         const entry = currentPrice;
         const sl = entry - slDist;
@@ -157,19 +157,40 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
         }
 
         const baseConf = 75;
-        const { confidence, modNotes } = applyModifiers(baseConf, "BUY");
+        const isBuyCounter = localTrend === "DOWN";
+        const { confidence: rawBuyConf, modNotes } = applyModifiers(baseConf, "BUY", isBuyCounter);
+        const confidence = isBuyCounter ? Math.min(rawBuyConf, 60) : rawBuyConf;
+        const buyLabel = isBuyCounter
+          ? `EXPLOSIVE ${structureM15.pattern.type} BREAKOUT ▲ ⚠️ COUNTER`
+          : `EXPLOSIVE ${structureM15.pattern.type} BREAKOUT ▲`;
 
-        suggestions.push({
-          type: "BUY", tier: 1,
-          label: `EXPLOSIVE ${structureM15.pattern.type} BREAKOUT`,
-          note: confidence >= 70 ? "Breakout Atas terkonfirmasi! Eksekusi Market." : "Breakout terdeteksi, tapi konfirmasi lemah. Hati-hati.",
-          reasoning: `Harga memotong diagonal ${Math.round(upper.currentValue)} | Compression ${structureM15.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
-          confidence, zone: entry.toFixed(1),
-          sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
-          rr: calcRR(entry, sl, tp2)
-        });
-        primaryAdded = true;
-      } else if (currentPrice < lower.currentValue && distLower < 0.15) {
+        // BUG FIX: Jika breakout BUY COUNTER tren DOWN, jangan isi slot primaryAdded
+        // supaya PRIMARY SELL pullback tetap terbentuk
+        if (!isBuyCounter) {
+          suggestions.push({
+            type: "BUY", tier: 1,
+            label: buyLabel,
+            note: confidence >= 70 ? "Breakout Atas terkonfirmasi! Eksekusi BUY Market." : "Breakout atas terdeteksi, tapi konfirmasi lemah. Hati-hati.",
+            reasoning: `Harga memotong diagonal ${Math.round(upper.currentValue)} | Compression ${structureM15.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
+            confidence, zone: entry.toFixed(1),
+            sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
+            rr: calcRR(entry, sl, tp2)
+          });
+          primaryAdded = true;
+        } else {
+          // Counter trend breakout: tampilkan sebagai peringatan tapi JANGAN set primaryAdded
+          suggestions.push({
+            type: "BUY", tier: 1,
+            label: buyLabel,
+            note: "⚠️ Breakout MELAWAN tren dominan DOWN. Risiko tinggi — konfirmasi ekstra diperlukan.",
+            reasoning: `Harga memotong diagonal ${Math.round(upper.currentValue)} | Compression ${structureM15.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
+            confidence, zone: entry.toFixed(1),
+            sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
+            rr: calcRR(entry, sl, tp2)
+          });
+          // primaryAdded tetap false → PRIMARY SELL pullback akan terbentuk
+        }
+      } else if (currentPrice < lower.currentValue && distLower < 0.5) {
         const slDist = atrM15 > 0 ? atrM15 * ENGINE_CONFIG.atrMultiplier.breakout : currentPrice * 0.002;
         const entry = currentPrice;
         const sl = entry + slDist;
@@ -183,18 +204,42 @@ export function computeSignals(currentPrice: number, klineData: KlineData): Sign
         }
 
         const baseConf = 75;
-        const { confidence, modNotes } = applyModifiers(baseConf, "SELL");
+        const isSellCounter = localTrend === "UP";
+        const { confidence: rawSellConf, modNotes } = applyModifiers(baseConf, "SELL", isSellCounter);
+        // Cap confidence jika counter-trend: max 60% agar tidak menyesatkan
+        const confidence = isSellCounter ? Math.min(rawSellConf, 60) : rawSellConf;
+        const sellLabel = isSellCounter
+          ? `EXPLOSIVE ${structureM15.pattern.type} BREAKDOWN ▼ ⚠️ COUNTER`
+          : `EXPLOSIVE ${structureM15.pattern.type} BREAKDOWN ▼`;
 
-        suggestions.push({
-          type: "SELL", tier: 1,
-          label: `EXPLOSIVE ${structureM15.pattern.type} BREAKOUT`,
-          note: confidence >= 70 ? "Breakout Bawah terkonfirmasi! Eksekusi Market." : "Breakout terdeteksi, konfirmasi lemah. Hati-hati.",
-          reasoning: `Harga memotong diagonal ${Math.round(lower.currentValue)} | Compression ${structureM15.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
-          confidence, zone: entry.toFixed(1),
-          sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
-          rr: calcRR(entry, sl, tp2)
-        });
-        primaryAdded = true;
+        // BUG FIX: Jika breakdown COUNTER tren UP, JANGAN isi slot primaryAdded.
+        // Biarkan slot PRIMARY diisi oleh PULLBACK BUY (searah tren).
+        // Counter breakdown tetap ditampilkan sebagai info, tapi tidak "mengunci" PRIMARY.
+        if (!isSellCounter) {
+          suggestions.push({
+            type: "SELL", tier: 1,
+            label: sellLabel,
+            note: confidence >= 70 ? "Breakdown Bawah terkonfirmasi! Eksekusi SELL Market." : "Breakdown bawah terdeteksi, konfirmasi lemah. Hati-hati.",
+            reasoning: `Harga memotong diagonal ${Math.round(lower.currentValue)} | Compression ${structureM15.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
+            confidence, zone: entry.toFixed(1),
+            sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
+            rr: calcRR(entry, sl, tp2)
+          });
+          primaryAdded = true;
+        } else {
+          // Counter trend: tampilkan sebagai peringatan tapi JANGAN set primaryAdded
+          // supaya PRIMARY BUY pullback tetap muncul
+          suggestions.push({
+            type: "SELL", tier: 1,
+            label: sellLabel,
+            note: "⚠️ Breakdown MELAWAN tren dominan UP. Risiko tinggi — konfirmasi ekstra diperlukan.",
+            reasoning: `Harga memotong diagonal ${Math.round(lower.currentValue)} | Compression ${structureM15.pattern.compressionPct.toFixed(0)}% | ${modNotes.join(' | ')}`,
+            confidence, zone: entry.toFixed(1),
+            sl: sl.toFixed(1), tp1: tp1.toFixed(1), tp2: tp2.toFixed(1),
+            rr: calcRR(entry, sl, tp2)
+          });
+          // primaryAdded tetap false → PRIMARY BUY pullback akan terbentuk di bawah
+        }
       }
     }
   }

@@ -544,7 +544,10 @@ export default function App() {
             
             {/* ── CARD 1: PRIMARY ENTRY ─────────────────────────────── */}
             {(() => {
-              const primary = (analysis?.suggestions || []).find(s => s.tier === 1);
+              // FIX: Prioritaskan signal tier 1 NON-COUNTER (tidak ada "COUNTER" di label)
+              // Jika ada dua tier 1 (counter + pullback), tampilkan yang searah tren
+              const tier1All = (analysis?.suggestions || []).filter(s => s.tier === 1);
+              const primary = tier1All.find(s => !s.label.includes('COUNTER')) ?? tier1All[0];
               const isBuy = primary?.type === 'BUY';
               const isSell = primary?.type === 'SELL';
               const color = isBuy ? '#00ff88' : isSell ? '#ff4466' : '#64748b';
