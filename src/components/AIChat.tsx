@@ -181,7 +181,7 @@ export default function AIChat({ apiKey, model, marketData }: Props) {
             ...systemMessages,
             ...newMessages,
           ],
-          temperature: 0.5,
+          temperature: 0.7,
           max_tokens: 2048,
         }),
       })

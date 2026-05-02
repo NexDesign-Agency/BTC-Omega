@@ -133,7 +133,7 @@ export async function fetchAIAnalysis(
         messages: [
           { role: 'user', content: prompt }
         ],
-        temperature: 0.3,
+        temperature: 0.65,
         max_tokens: 4096,
       }),
     })

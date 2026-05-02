@@ -160,10 +160,10 @@ export default function App() {
       let h4Raw: any[] = [], h1Raw: any[] = [], m15Raw: any[] = [], m5Raw: any[] = [];
 
       try {
-        const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
+        const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
         if (binanceRes.ok) {
           const d = await binanceRes.json();
-          currentPrice = parseFloat(d.lastPrice);
+          currentPrice = parseFloat(d.price);
         }
 
         const fetchTF = async (interval: string, limit = 150) => {
@@ -286,11 +286,11 @@ export default function App() {
 
     const fetchBackgroundData = async () => {
       try {
-        const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
+        const binanceRes = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT");
         let newPrice = 0;
         if (binanceRes.ok) {
           const d = await binanceRes.json();
-          newPrice = parseFloat(d.lastPrice);
+          newPrice = parseFloat(d.price);
         }
 
         const fetchTF = async (interval: string, limit = 150) => {
