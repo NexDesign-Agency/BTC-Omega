@@ -184,9 +184,9 @@ export default function AIChat({ apiKey, model, marketData }: Props) {
           ...prev,
           ...(usedFallback
             ? [{
-                role: 'assistant' as const,
-                content: `Info: saldo model berbayar habis, otomatis pindah ke model free (${usedModel}).`,
-              }]
+              role: 'assistant' as const,
+              content: `Info: saldo model berbayar habis, otomatis pindah ke model free (${usedModel}).`,
+            }]
             : []),
           { role: 'assistant', content: reply },
         ])
@@ -281,18 +281,35 @@ export default function AIChat({ apiKey, model, marketData }: Props) {
         )}
         {messages.map((msg, i) => (
           <div key={i} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[90%] rounded-lg px-2.5 py-1.5 text-[10px] leading-relaxed ${
-              msg.role === 'user'
+            <div className={`max-w-[90%] rounded-lg px-2.5 py-1.5 text-[11.5px] leading-relaxed ${msg.role === 'user'
                 ? 'bg-accent/20 border border-accent/30 text-slate-200'
                 : 'bg-white/5 border border-trading-border text-slate-300'
-            }`}>
+              }`}>
               {msg.role === 'assistant' && (
                 <div className="flex items-center gap-1 mb-1 opacity-50">
                   <Bot size={10} />
                   <span className="text-[7px] font-bold uppercase tracking-widest">AI</span>
                 </div>
               )}
-              <p className="whitespace-pre-wrap">{msg.content}</p>
+              <div className="whitespace-pre-wrap">
+                {msg.content.split('\n').map((line, lineIdx) => {
+                  if (!line) return <br key={lineIdx} />;
+                  const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g);
+                  return (
+                    <div key={lineIdx} className="min-h-[1.2em]">
+                      {parts.map((part, j) => {
+                        if (part.startsWith('**') && part.endsWith('**')) {
+                          return <strong key={j} className="text-white font-bold">{part.slice(2, -2)}</strong>;
+                        }
+                        if (part.startsWith('*') && part.endsWith('*')) {
+                          return <em key={j} className="text-slate-200 italic">{part.slice(1, -1)}</em>;
+                        }
+                        return <span key={j}>{part}</span>;
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </div>
         ))}

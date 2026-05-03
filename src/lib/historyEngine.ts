@@ -49,14 +49,14 @@ export function addSignalToHistory(signal: Omit<HistoryEntry, "id" | "timestamp"
     timestamp,
     outcome: "PENDING",
   };
-  
+
   const existing = loadHistory();
   // Avoid duplicate if same type+zone within 10 minutes
   const tenMin = 10 * 60 * 1000;
   const dupe = existing.find(
     e => e.type === entry.type && e.zone === entry.zone && (timestamp - e.timestamp) < tenMin
   );
-  
+
   if (!dupe) {
     saveHistory([entry, ...existing]);
     return { id, isDupe: false };

@@ -18,7 +18,9 @@ import {
   ChevronRight,
   Trophy,
   Settings,
-  Bot
+  Bot,
+  Shield,
+  Lock
 } from "lucide-react";
 
 // TradingView widget script loader
@@ -230,7 +232,7 @@ export default function App() {
               setQuickWinRate(calcWinRate(loadHistory()).winRate || null);
             }
             aiSugs.forEach(s => {
-              if (s.type !== "WAIT" && s.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
+              if (s.type !== "WAIT" && s.zone !== "---" && s.confidence >= ENGINE_CONFIG.minConfidenceForRecord) {
                 const result = addSignalToHistory({
                   type: s.type as 'BUY' | 'SELL',
                   tier: s.tier,
@@ -336,25 +338,106 @@ export default function App() {
     return (
       <div className="min-h-[100dvh] w-screen bg-[#05070a] text-white flex flex-col relative overflow-hidden font-sans select-none">
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_100%,rgba(0,255,136,0.08),transparent_70%)] opacity-60 pointer-events-none" />
-        <div className="relative z-10 flex flex-col flex-1 max-w-7xl mx-auto px-6 md:px-16 py-8 md:py-24">
-          <div className="flex-1 flex flex-col items-center justify-center text-center animate-in fade-in slide-in-from-bottom-10 duration-1000">
-            <h1 className="text-4xl md:text-8xl font-black italic tracking-tighter leading-[0.85] mb-8">
-              PURE PRICE ACTION <br />
-              <span className="text-bull text-glow uppercase">SIGNAL OMEGA</span>
+        
+        {/* Top Header / Logo */}
+        <div className="relative z-20 flex items-center gap-3 p-6 md:p-8">
+          <div className="w-10 h-10 border-2 border-bull rounded-full flex items-center justify-center bg-bull/10 shadow-[0_0_15px_rgba(0,255,136,0.3)]">
+            <span className="font-serif italic font-black text-bull text-lg">Ω</span>
+          </div>
+          <div className="flex flex-col">
+            <h2 className="text-white font-black italic tracking-widest text-sm uppercase">BTCUSD <span className="text-bull">SIGNAL OMEGA</span></h2>
+            <div className="flex items-center gap-1.5">
+              <div className="w-1.5 h-1.5 rounded-full bg-bull animate-pulse shadow-[0_0_5px_rgba(0,255,136,1)]" />
+              <span className="text-[8px] text-bull font-bold tracking-[0.2em] uppercase opacity-70">LIVE SCANNING • BINANCE</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Main Content Grid */}
+        <div className="relative z-10 flex-1 grid grid-cols-1 lg:grid-cols-2 max-w-7xl mx-auto w-full px-6 md:px-16 pb-12">
+          
+          {/* Left Panel */}
+          <div className="flex flex-col justify-center items-start pt-10 lg:pt-0 animate-in fade-in slide-in-from-left-10 duration-1000">
+            <h1 className="text-5xl md:text-7xl lg:text-[5.5rem] font-black italic tracking-tighter leading-[0.85] mb-8">
+              <span className="text-white">PREMIUM</span><br />
+              <span className="text-bull text-glow uppercase">BTC SIGNAL</span>
             </h1>
+            
             <button
               onClick={enterTerminal}
-              className="px-8 md:px-12 py-5 border-2 border-bull text-bull hover:bg-bull hover:text-black font-black text-lg md:text-xl italic tracking-widest rounded-xl transition-all active:scale-95 shadow-[0_0_30px_rgba(0,255,136,0.2)] mb-8"
+              className="px-8 md:px-12 py-4 md:py-5 border-2 border-bull text-bull hover:bg-bull hover:text-black font-black text-lg md:text-xl italic tracking-widest rounded-xl transition-all active:scale-95 shadow-[0_0_30px_rgba(0,255,136,0.15)] hover:shadow-[0_0_40px_rgba(0,255,136,0.4)] mb-8"
             >
               ENTER TERMINAL
             </button>
-            <div className="flex items-center justify-center gap-2">
+            
+            <div className="flex items-center gap-2 mb-12">
               <span className="text-[10px] font-bold text-white/40 tracking-widest uppercase">Auto-redirecting in</span>
               <span className="w-5 h-5 flex items-center justify-center bg-bull/20 rounded border border-bull/30 text-bull font-mono text-xs font-bold">{countdown}s</span>
-              </div>
-</div>
-</div>
-    </div>
+            </div>
+
+            {/* Features List */}
+            <div className="flex flex-col gap-5 mt-auto lg:mt-0">
+              {[
+                { icon: <TrendingUp size={16} className="text-bull" />, title: "Real-Time Signal", desc: "Market Update real-time" },
+                { icon: <Shield size={16} className="text-bull" />, title: "High Accuracy", desc: "Akurasi 80%+" },
+                { icon: <Lock size={16} className="text-bull" />, title: "Secure & Reliable", desc: "Validasi AI & Logic" },
+              ].map((f, i) => (
+                <div key={i} className="flex items-center gap-4 group">
+                  <div className="w-10 h-10 rounded-lg bg-[#0a0f16] border border-white/5 flex items-center justify-center group-hover:border-bull/30 group-hover:bg-bull/5 transition-all">
+                    {f.icon}
+                  </div>
+                  <div className="flex flex-col text-left">
+                    <span className="text-sm font-bold text-white tracking-wide">{f.title}</span>
+                    <span className="text-[10px] text-white/40 font-medium tracking-wide">{f.desc}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Bottom Footer Tags */}
+            <div className="hidden lg:flex absolute bottom-6 left-6 md:left-16 items-center gap-6 opacity-30">
+              <span className="text-[9px] font-black tracking-[0.3em] uppercase">⟡ BETTER ANALYSIS</span>
+              <span className="text-[9px] font-black tracking-[0.3em] uppercase">⟡ BETTER DECISIONS</span>
+            </div>
+          </div>
+
+          {/* Right Panel: 3D Omega Animation */}
+          <div className="hidden lg:flex flex-col items-center justify-center relative w-full h-full animate-in fade-in zoom-in-95 duration-1000 delay-300">
+            {/* Background glowing rings */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[400px] h-[400px] rounded-full border-[1px] border-bull/10 border-dashed animate-[spin_40s_linear_infinite]" />
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] rounded-full border-[1px] border-bull/5 animate-[spin_60s_linear_infinite_reverse]" />
+            
+            {/* Center 3D Sphere */}
+            <div className="relative w-[320px] h-[320px] rounded-full flex items-center justify-center shadow-[inset_-20px_-20px_60px_rgba(0,0,0,0.8),inset_10px_10px_40px_rgba(255,255,255,0.05),0_0_50px_rgba(0,255,136,0.1)] bg-gradient-to-br from-[#121a22] to-[#05070a] border border-white/5 overflow-hidden">
+              <div className="absolute inset-0 bg-[radial-gradient(circle_at_30%_30%,rgba(0,255,136,0.15),transparent_60%)]" />
+              <span className="font-serif italic font-black text-bull/10 text-[18rem] leading-none select-none drop-shadow-[0_0_20px_rgba(0,255,136,0.1)]">Ω</span>
+              
+              {/* Glowing Arrow inside sphere */}
+              <svg width="200" height="150" viewBox="0 0 200 150" className="absolute z-10 drop-shadow-[0_0_15px_rgba(0,255,136,0.6)]">
+                <path d="M 20 120 L 70 80 L 110 100 L 180 30" fill="none" stroke="#00ff88" strokeWidth="12" strokeLinecap="round" strokeLinejoin="round" />
+                <path d="M 140 30 L 180 30 L 180 70" fill="none" stroke="#00ff88" strokeWidth="12" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+
+            {/* Floating Glassmorphism Badges */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-[220px] -translate-y-[40px] px-4 py-3 rounded-xl bg-black/40 backdrop-blur-md border border-[#ffaa00]/30 shadow-[0_0_20px_rgba(255,170,0,0.15)] animate-[bounce_4s_ease-in-out_infinite]">
+              <p className="text-[8px] font-bold text-[#ffaa00]/70 tracking-widest uppercase mb-1">Buy Zone</p>
+              <p className="text-xl font-black text-[#ffaa00] tracking-tight">$76,030.0</p>
+            </div>
+
+            <div className="absolute top-1/2 left-1/2 -translate-x-[150px] translate-y-[80px] px-4 py-3 rounded-xl bg-black/40 backdrop-blur-md border border-[#ff4466]/30 shadow-[0_0_20px_rgba(255,68,102,0.15)] animate-[bounce_5s_ease-in-out_infinite_reverse]">
+              <p className="text-[8px] font-bold text-[#ff4466]/70 tracking-widest uppercase mb-1">Stop Loss</p>
+              <p className="text-lg font-black text-[#ff4466] tracking-tight">$75,572.5</p>
+            </div>
+
+            <div className="absolute top-1/2 left-1/2 translate-x-[60px] -translate-y-[140px] px-4 py-3 rounded-xl bg-black/40 backdrop-blur-md border border-bull/30 shadow-[0_0_20px_rgba(0,255,136,0.15)] animate-[bounce_6s_ease-in-out_infinite]">
+              <p className="text-[8px] font-bold text-bull/70 tracking-widest uppercase mb-1">TP 2 Target</p>
+              <p className="text-xl font-black text-bull tracking-tight">$77,707.7</p>
+            </div>
+          </div>
+
+        </div>
+      </div>
     );
   }
 
@@ -735,14 +818,28 @@ export default function App() {
               </div>
               <div className="p-3 space-y-1.5">
                 {(() => {
-                  if (!analysis) return <p className="text-slate-500 text-[10px]">Tunggu hasil pemindaian...</p>;
+                  if (!analysis) return <p className="text-slate-500 text-xs">Tunggu hasil pemindaian...</p>;
                   if (aiAnalysis) {
-                    // AI analysis: render as markdown-like text with line breaks
-                    return aiAnalysis.marketAnalysis.split('\n').map((line, i) => (
-                      <p key={i} className="text-[10px] font-medium text-slate-300 leading-relaxed">
-                        {line || '\u00A0'}
-                      </p>
-                    ));
+                    const renderFormatted = (text) => {
+                      return text.split('\n').map((line, i) => {
+                        if (!line) return <p key={i} className="text-[11px] font-medium text-slate-300 leading-relaxed">{'\u00A0'}</p>;
+                        const parts = line.split(/(\*\*.*?\*\*|\*.*?\*)/g);
+                        return (
+                          <p key={i} className="text-[11.5px] font-medium text-slate-300 leading-relaxed">
+                            {parts.map((part, j) => {
+                              if (part.startsWith('**') && part.endsWith('**')) {
+                                return <strong key={j} className="text-white font-bold">{part.slice(2, -2)}</strong>;
+                              }
+                              if (part.startsWith('*') && part.endsWith('*')) {
+                                return <em key={j} className="text-slate-200 italic">{part.slice(1, -1)}</em>;
+                              }
+                              return <span key={j}>{part}</span>;
+                            })}
+                          </p>
+                        );
+                      });
+                    };
+                    return renderFormatted(aiAnalysis.marketAnalysis);
                   }
                   // Offline fallback
                   const advice = analysis.suggestions?.find(s => s.isAdvice);
@@ -750,10 +847,10 @@ export default function App() {
                   return (
                     <>
                       {advice && advice.note.split('\n').map((line, i) => (
-                        <p key={i} className="text-[10px] font-medium text-slate-300 leading-relaxed">{line}</p>
+                        <p key={i} className="text-[11.5px] font-medium text-slate-300 leading-relaxed">{line}</p>
                       ))}
                       {skip && (
-                        <p className="text-[10px] font-bold text-slate-400 mt-2 pt-2 border-t border-white/5">
+                        <p className="text-[11.5px] font-bold text-slate-400 mt-2 pt-2 border-t border-white/5">
                           ⚠️ {skip.reasoning}
                         </p>
                       )}
@@ -763,29 +860,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* ── Reasoning ─────────────────────────────────────────── */}
-            <div className="px-3 pb-4 flex-1">
-              <h3 className="text-[10px] uppercase tracking-widest font-bold opacity-30 mb-2">REASONING & BIAS</h3>
-              <div className="space-y-2">
-                {(analysis?.suggestions || []).filter(s => !s.isSkip && !s.isAdvice).map((s, i) => {
-                  // FIX BUG #2: Pisahkan session label dari reasoning — tampilkan tanpa emoji Unicode yang bisa terpotong
-                  const reasonParts = s.reasoning.split('|').map(p => p.trim()).filter(Boolean);
-                  return (
-                    <div key={i} className="text-[10px] font-medium text-slate-500 leading-relaxed border-l-2 pl-2"
-                      style={{ borderColor: s.type === 'BUY' ? '#00ff88' : '#ff4466' }}>
-                      {reasonParts.map((part, j) => (
-                        <span key={j} className={j === 0 ? '' : 'opacity-70'}>
-                          {j > 0 ? ' · ' : ''}{part}
-                        </span>
-                      ))}
-                    </div>
-                  );
-                })}
-                {(!analysis?.suggestions || analysis.suggestions.filter(s => !s.isSkip && !s.isAdvice).length === 0) && (
-                  <p className="text-slate-600 text-[10px]">Tunggu hasil pemindaian...</p>
-                )}
-              </div>
-            </div>
           </div>
 
           {/* Right: AI Live Chat Panel */}
