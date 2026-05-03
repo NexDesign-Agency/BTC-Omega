@@ -376,12 +376,6 @@ export default function App() {
           </div>
           <div>
             <h1 className="font-black text-white tracking-widest text-[11px] md:text-sm italic uppercase italic">BTCUSD <span className="text-bull underline decoration-bull/40 decoration-wavy">SIGNAL OMEGA</span></h1>
-            <div className="flex items-center gap-2">
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-bull/10 border border-bull/20">
-                <span className="w-1 h-1 md:w-1.5 md:h-1.5 rounded-full bg-bull animate-pulse shadow-[0_0_5px_rgba(0,255,136,0.5)]" />
-                <span className="text-[8px] md:text-[9px] font-black text-bull">PRICE ACTION ENGINE</span>
-              </div>
-            </div>
           </div>
         </div>
 
