@@ -352,17 +352,9 @@ export default function App() {
               <span className="text-[10px] font-bold text-white/40 tracking-widest uppercase">Auto-redirecting in</span>
               <span className="w-5 h-5 flex items-center justify-center bg-bull/20 rounded border border-bull/30 text-bull font-mono text-xs font-bold">{countdown}s</span>
               </div>
-            </div>
-          </div>
-
-          {/* Right: AI Live Chat Panel */}
-          <div className={`
-              ${mobileActiveTab === 'CHAT' ? 'col-span-12 flex' : 'hidden'}
-              lg:flex lg:col-span-3 flex-col h-full w-full
-            `}>
-            <AIChat apiKey={openRouterKey} model={openRouterModel} />
-          </div>
-        </div>
+</div>
+</div>
+    </div>
     );
   }
 
