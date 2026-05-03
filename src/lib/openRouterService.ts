@@ -22,31 +22,286 @@ export interface AIAnalysisResult {
 }
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
+const OPENROUTER_MODELS_URL = 'https://openrouter.ai/api/v1/models'
 
-function klinesToText(klines: any[], label: string, limit = 80): string {
+// ─── FREE FALLBACK MODELS — last-resort static list ────────────────────────
+// Ini hanya safety net. Model aktual diambil dari dynamic fetch OpenRouter API.
+// Dari log terbukti yang masih punya provider aktif:
+const FREE_FALLBACK_MODELS = [
+  'meta-llama/llama-3.3-70b-instruct:free',      // Terbukti punya provider (429 bukan 404)
+  'nousresearch/hermes-3-llama-3.1-405b:free',   // Terbukti punya provider
+  'qwen/qwen3-coder:free',                        // Terbukti punya provider
+  'mistralai/mistral-7b-instruct:free',           // Fallback lama, sering ada
+  'huggingfaceh4/zephyr-7b-beta:free',            // Safety net
+]
+let cachedDynamicFreeModels: string[] | null = null
+let cachedDynamicFreeModelsAt = 0
+
+export interface OpenRouterChatMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+interface CreateChatCompletionArgs {
+  apiKey: string
+  model: string
+  messages: OpenRouterChatMessage[]
+  temperature?: number
+  max_tokens?: number
+}
+
+interface CreateChatCompletionResult {
+  data: any
+  usedModel: string
+  usedFallback: boolean
+}
+
+function isInsufficientBalanceError(status: number, errText: string): boolean {
+  if (status === 402 || status === 403 || status === 429) return true
+  const text = errText.toLowerCase()
+  return (
+    text.includes('insufficient') ||
+    text.includes('insufficient_quota') ||
+    text.includes('balance') ||
+    text.includes('credit') ||
+    text.includes('credits') ||
+    text.includes('quota') ||
+    text.includes('quota exceeded') ||
+    text.includes('billing') ||
+    text.includes('payment required') ||
+    text.includes('payment') ||
+    text.includes('rate limit') ||
+    text.includes('no provider') ||
+    text.includes('no endpoint') ||
+    text.includes('no endpoints') ||
+    text.includes('provider returned error')
+  )
+}
+
+function extractAffordableMaxTokens(errText: string): number | null {
+  const m = errText.match(/can only afford\s+(\d+)/i)
+  if (!m) return null
+  const affordable = parseInt(m[1], 10)
+  if (!Number.isFinite(affordable) || affordable <= 32) return null
+  return Math.max(64, affordable - 16)
+}
+
+// Skor model berdasarkan kecenderungan kuat untuk analisa trading + JSON output
+function scoreFreeModel(id: string): number {
+  const s = id.toLowerCase()
+  let score = 0
+  // Model yang diketahui kuat untuk reasoning & JSON terstruktur
+  if (s.includes('deepseek-r1'))            score += 100
+  if (s.includes('deepseek-chat-v3'))       score += 95
+  if (s.includes('qwen3-235b'))             score += 90
+  if (s.includes('qwen3-30b'))              score += 80
+  if (s.includes('gemini-2.0-flash'))       score += 85
+  if (s.includes('llama-4-maverick'))       score += 82
+  if (s.includes('llama-4-scout'))          score += 75
+  if (s.includes('phi-4-reasoning'))        score += 72
+  if (s.includes('hermes-3'))               score += 70  // terbukti aktif dari log
+  if (s.includes('llama-3.3-70b'))          score += 68
+  if (s.includes('qwen3-coder'))            score += 65  // terbukti aktif dari log
+  if (s.includes('mistral-small-3.1'))      score += 60
+  if (s.includes('mistral-small-3.2'))      score += 62
+  if (s.includes('qwen3'))                  score += 55
+  if (s.includes('llama-3.1-70b'))          score += 50
+  if (s.includes('llama-3.1-405b'))         score += 65
+  // Boost untuk model yang dikenal bisa handle long JSON
+  if (s.includes('70b') || s.includes('72b')) score += 15
+  if (s.includes('235b') || s.includes('405b')) score += 20
+  if (s.includes('instruct') || s.includes('chat')) score += 5
+  // Penalti untuk model yang sering gagal JSON kompleks
+  if (s.includes('vision') || s.includes('audio') || s.includes('omni')) score -= 50
+  if (s.includes('2b') || s.includes('3b') || s.includes('4b')) score -= 30
+  if (s.includes('7b') || s.includes('8b') || s.includes('9b')) score -= 20
+  return score
+}
+
+async function getDynamicFreeFallbackModels(): Promise<string[]> {
+  const now = Date.now()
+  if (cachedDynamicFreeModels && now - cachedDynamicFreeModelsAt < 10 * 60 * 1000) {
+    return cachedDynamicFreeModels
+  }
+  try {
+    const res = await fetch(OPENROUTER_MODELS_URL)
+    if (!res.ok) return []
+    const data = await res.json()
+    const ids: string[] = Array.isArray(data?.data)
+      ? data.data
+          .map((m: any) => String(m?.id || ''))
+          .filter((id: string) => id.endsWith(':free') && scoreFreeModel(id) > 0)
+      : []
+    // Sort by score descending — model terkuat duluan
+    ids.sort((a, b) => scoreFreeModel(b) - scoreFreeModel(a))
+    cachedDynamicFreeModels = ids
+    cachedDynamicFreeModelsAt = now
+    return cachedDynamicFreeModels
+  } catch {
+    return []
+  }
+}
+
+async function postChatCompletion(
+  apiKey: string,
+  model: string,
+  messages: OpenRouterChatMessage[],
+  temperature: number,
+  max_tokens: number
+): Promise<Response> {
+  return fetch(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature,
+      max_tokens,
+    }),
+  })
+}
+
+export async function createOpenRouterChatCompletion({
+  apiKey,
+  model,
+  messages,
+  temperature = 0.7,
+  max_tokens = 2048,
+}: CreateChatCompletionArgs): Promise<CreateChatCompletionResult> {
+  // Dynamic models diambil dulu — ini yang BENAR-BENAR tersedia di OpenRouter sekarang
+  const dynamicFreeModels = await getDynamicFreeFallbackModels()
+
+  // Urutan kandidat yang BENAR:
+  // 1. Model utama (pilihan user)
+  // 2. Dynamic models dari API (up-to-date, yang benar-benar ada providernya) — difilter yang belum dicoba
+  // 3. Static FREE_FALLBACK_MODELS sebagai last resort
+  const staticSet = new Set(FREE_FALLBACK_MODELS)
+  const dynamicSet = new Set(dynamicFreeModels)
+  const candidateModels = [
+    model,
+    ...dynamicFreeModels.filter((m) => m !== model),                            // dynamic dulu!
+    ...FREE_FALLBACK_MODELS.filter((m) => m !== model && !dynamicSet.has(m)),   // static hanya jika belum ada di dynamic
+  ]
+  let shouldTryFallback = false
+  let firstErrorText = ''
+  let firstErrorStatus = 0
+  let fallbackMaxTokens = Math.min(max_tokens, 1024)
+  let consecutive429 = 0
+  const MAX_CONSECUTIVE_429 = 6 // stop setelah 6 model berturut-turut rate-limited
+
+  for (let i = 0; i < candidateModels.length; i++) {
+    const candidateModel = candidateModels[i]
+    if (i > 0 && !shouldTryFallback) break
+
+    // Delay adaptif:
+    // - 404 = tidak perlu delay (langsung skip, provider tidak ada)
+    // - 429 = tunggu lebih lama sesuai berapa kali sudah rate-limited
+    if (i > 0) {
+      const delay = consecutive429 > 0
+        ? Math.min(2000 + consecutive429 * 1000, 8000) // 2s, 3s, 4s, ... max 8s
+        : 300                                           // 404 = cukup 300ms
+      await new Promise(r => setTimeout(r, delay))
+    }
+
+    const tokensForAttempt = i === 0 ? max_tokens : fallbackMaxTokens
+    const res = await postChatCompletion(apiKey, candidateModel, messages, temperature, tokensForAttempt)
+    if (res.ok) {
+      const data = await res.json()
+      const bodyErrorText =
+        typeof data?.error === 'string'
+          ? data.error
+          : data?.error?.message || data?.message || ''
+      if (bodyErrorText && isInsufficientBalanceError(res.status, String(bodyErrorText))) {
+        if (i === 0) {
+          firstErrorText = String(bodyErrorText)
+          firstErrorStatus = res.status || 402
+          shouldTryFallback = true
+          continue
+        }
+      }
+      const content = data?.choices?.[0]?.message?.content
+      if (!content || (typeof content === 'string' && !content.trim())) {
+        // Respons kosong sering terjadi di model tertentu; lanjut coba fallback berikutnya.
+        if (i < candidateModels.length - 1) {
+          if (i === 0) {
+            firstErrorText = 'Primary model returned empty content'
+            firstErrorStatus = res.status || 200
+            shouldTryFallback = true
+          }
+          continue
+        }
+      }
+      return {
+        data,
+        usedModel: candidateModel,
+        usedFallback: i > 0,
+      }
+    }
+
+    const errText = await res.text()
+    const isRateLimit = res.status === 429
+    const isNotFound = res.status === 404
+    if (isRateLimit) consecutive429++
+    else consecutive429 = 0  // reset: 404 bukan rate limit, jangan accumulate
+
+    if (i === 0) {
+      firstErrorText = errText
+      firstErrorStatus = res.status
+      // 404 = model tidak ditemukan, 402/429 = quota/rate limit → coba fallback
+      shouldTryFallback = isNotFound || isInsufficientBalanceError(res.status, errText)
+      const affordableTokens = extractAffordableMaxTokens(errText)
+      if (affordableTokens) {
+        fallbackMaxTokens = Math.min(fallbackMaxTokens, affordableTokens)
+      }
+      if (!shouldTryFallback) {
+        throw new Error(`OpenRouter API error ${res.status}: ${errText.slice(0, 200)}`)
+      }
+      console.warn(`Primary model failed (${res.status}), trying free fallback...`)
+      continue
+    }
+    // Stop jika terlalu banyak rate limit berturut-turut
+    if (consecutive429 >= MAX_CONSECUTIVE_429) {
+      console.warn(`${MAX_CONSECUTIVE_429} consecutive 429s — stopping fallback chain`)
+      break
+    }
+    // Fallback model gagal → skip saja, lanjut ke berikutnya
+    console.warn(`Fallback model ${candidateModel} failed (${res.status}), trying next...`)
+    continue
+  }
+
+  throw new Error(
+    `OpenRouter API error ${firstErrorStatus}: ${firstErrorText.slice(0, 200)}`
+  )
+}
+
+function klinesToText(klines: any[], label: string, limit = 30): string {
   const data = klines.slice(-limit)
   const lines: string[] = [`## ${label} (${data.length} candles)`]
   lines.push('```')
-  lines.push('Time(UTC)            Open      High      Low       Close     Volume')
-  lines.push('─'.repeat(70))
+  lines.push('Time(UTC)    Open      High      Low       Close')
+  lines.push('─'.repeat(62))
   for (const k of data) {
-    const time = new Date(k[0]).toISOString().replace('T', ' ').slice(0, 19)
+    const d = new Date(k[0])
+    const time = d.toISOString().slice(11, 16)
+    const dt = d.toISOString().slice(5, 10)
     const o = parseFloat(k[1]).toFixed(1).padStart(9)
     const h = parseFloat(k[2]).toFixed(1).padStart(9)
     const l = parseFloat(k[3]).toFixed(1).padStart(9)
     const c = parseFloat(k[4]).toFixed(1).padStart(9)
-    const v = Math.round(parseFloat(k[5])).toString().padStart(8)
-    lines.push(`${time} ${o} ${h} ${l} ${c} ${v}`)
+    lines.push(`${dt} ${time} ${o} ${h} ${l} ${c}`)
   }
   lines.push('```')
   return lines.join('\n')
 }
 
 function buildPrompt(currentPrice: number, kd: KlineData): string {
-  const h4Text = kd.h4?.length ? klinesToText(kd.h4, 'H4', 50) : '(data H4 tidak tersedia)'
-  const h1Text = kd.h1?.length ? klinesToText(kd.h1, 'H1', 60) : '(data H1 tidak tersedia)'
-  const m15Text = kd.m15?.length ? klinesToText(kd.m15, 'M15', 80) : '(data M15 tidak tersedia)'
-  const m5Text = kd.m5?.length ? klinesToText(kd.m5, 'M5', 80) : '(data M5 tidak tersedia)'
+  const h4Text = kd.h4?.length ? klinesToText(kd.h4, 'H4', 20) : '(data H4 tidak tersedia)'
+  const h1Text = kd.h1?.length ? klinesToText(kd.h1, 'H1', 24) : '(data H1 tidak tersedia)'
+  const m15Text = kd.m15?.length ? klinesToText(kd.m15, 'M15', 30) : '(data M15 tidak tersedia)'
+  const m5Text = kd.m5?.length ? klinesToText(kd.m5, 'M5', 30) : '(data M5 tidak tersedia)'
 
   return `Kamu adalah AI trading analyst spesialis BTCUSD. Analisis data OHLCV multi-timeframe di bawah dan berikan sinyal trading.
 
@@ -122,29 +377,16 @@ export async function fetchAIAnalysis(
   const prompt = buildPrompt(currentPrice, kd)
 
   try {
-    const res = await fetch(OPENROUTER_URL, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        messages: [
-          { role: 'user', content: prompt }
-        ],
-        temperature: 0.65,
-        max_tokens: 4096,
-      }),
+    const { data, usedFallback, usedModel } = await createOpenRouterChatCompletion({
+      apiKey,
+      model,
+      messages: [{ role: 'user', content: prompt }],
+      temperature: 0.65,
+      max_tokens: 4096,
     })
-
-    if (!res.ok) {
-      const errText = await res.text()
-      console.error('OpenRouter API error:', res.status, errText)
-      throw new Error(`OpenRouter API error ${res.status}: ${errText.slice(0, 200)}`)
+    if (usedFallback) {
+      console.warn(`Primary model quota/balance issue, switched to free model: ${usedModel}`)
     }
-
-    const data = await res.json()
     const content = data?.choices?.[0]?.message?.content
 
     if (!content) {

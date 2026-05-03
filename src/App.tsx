@@ -109,7 +109,7 @@ export default function App() {
   const [showLevelLines, setShowLevelLines] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [openRouterKey, setOpenRouterKey] = useState(() => localStorage.getItem('omega_openrouter_key') || '');
-  const [openRouterModel, setOpenRouterModel] = useState(() => localStorage.getItem('omega_openrouter_model') || 'google/gemini-flash-1.5');
+  const [openRouterModel, setOpenRouterModel] = useState(() => localStorage.getItem('omega_openrouter_model') || 'deepseek/deepseek-r1:free');
   const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 

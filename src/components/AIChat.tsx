@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Send, Bot, RefreshCw } from 'lucide-react'
 import { BTC_ANALYST_SYSTEM_PROMPT, QUICK_ACTIONS } from '../constants'
-import { AIAnalysisResult } from '../lib/openRouterService'
+import { AIAnalysisResult, createOpenRouterChatCompletion } from '../lib/openRouterService'
 
 interface Message {
   role: 'user' | 'assistant' | 'system'
@@ -30,8 +30,6 @@ interface Props {
   model: string
   marketData?: MarketSnapshot | null
 }
-
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 
 // ── Build real-time market context string ─────────────────────────────
 function buildMarketContext(data: MarketSnapshot): string {
@@ -169,33 +167,29 @@ export default function AIChat({ apiKey, model, marketData }: Props) {
         })
       }
 
-      const res = await fetch(OPENROUTER_URL, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model,
-          messages: [
-            ...systemMessages,
-            ...newMessages,
-          ],
-          temperature: 0.7,
-          max_tokens: 2048,
-        }),
+      const { data, usedFallback, usedModel } = await createOpenRouterChatCompletion({
+        apiKey,
+        model,
+        messages: [
+          ...systemMessages,
+          ...newMessages,
+        ],
+        temperature: 0.7,
+        max_tokens: 2048,
       })
-
-      if (!res.ok) {
-        const errText = await res.text()
-        throw new Error(`API error ${res.status}: ${errText.slice(0, 150)}`)
-      }
-
-      const data = await res.json()
       const reply = data?.choices?.[0]?.message?.content
 
       if (reply) {
-        setMessages(prev => [...prev, { role: 'assistant', content: reply }])
+        setMessages(prev => [
+          ...prev,
+          ...(usedFallback
+            ? [{
+                role: 'assistant' as const,
+                content: `Info: saldo model berbayar habis, otomatis pindah ke model free (${usedModel}).`,
+              }]
+            : []),
+          { role: 'assistant', content: reply },
+        ])
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: 'Maaf, AI tidak memberikan respon.' }])
       }

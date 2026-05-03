@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
-import { X, Key, Cpu, Eye, EyeOff, Save, Zap } from 'lucide-react'
+import { X, Key, Cpu, Eye, EyeOff, Save } from 'lucide-react'
 
 interface Props {
   onClose: () => void
@@ -10,18 +10,19 @@ interface Props {
 }
 
 const MODEL_OPTIONS = [
-  { value: 'google/gemini-flash-1.5', label: 'Gemini Flash 1.5 (Cepat)' },
-  { value: 'google/gemini-pro-2.5', label: 'Gemini Pro 2.5 (Akurat)' },
-  { value: 'anthropic/claude-sonnet-4', label: 'Claude Sonnet 4 (Analitis)' },
-  { value: 'openai/gpt-4o', label: 'GPT-4o (Powerful)' },
-  { value: 'deepseek/deepseek-chat', label: 'DeepSeek V3 (Ekonomis)' },
-  { value: 'meta-llama/llama-4-maverick', label: 'Llama 4 Maverick' },
-  { value: 'qwen/qwen3-235b-a22b', label: 'Qwen 3 235B' },
+  { value: 'deepseek/deepseek-v4-flash',  label: '🔥 DeepSeek V4 Flash — Tercepat & Termurah' },
+  { value: 'anthropic/claude-sonnet-4-6', label: '🧠 Claude Sonnet 4.6 — Analitis Terbaik' },
+  { value: 'google/gemini-3.1-pro-preview', label: '🌟 Gemini 3.1 Pro — Benchmark Tertinggi' },
+  { value: 'google/gemini-3.1-pro-preview', label: '🌟 Gemini 3.1 Pro — Benchmark Tertinggi' },
+  { value: 'minimax/minimax-m2.5',        label: '💎 MiniMax M2.5 — Setara Opus, Murah' },
 ]
 
 export default function SettingsModal({ onClose, apiKey: initialKey, model: initialModel, onSave }: Props) {
+  const validModel = MODEL_OPTIONS.find(o => o.value === initialModel)
+    ? initialModel
+    : MODEL_OPTIONS[0].value
   const [apiKey, setApiKey] = useState(initialKey)
-  const [model, setModel] = useState(initialModel || MODEL_OPTIONS[0].value)
+  const [model, setModel] = useState(validModel)
   const [showKey, setShowKey] = useState(false)
 
   const handleSave = () => {
@@ -89,9 +90,9 @@ export default function SettingsModal({ onClose, apiKey: initialKey, model: init
                 </button>
               </div>
               <p className="text-[8px] text-slate-600 leading-relaxed">
-                Dapatkan API key gratis di{' '}
+                Daftar di{' '}
                 <a href="https://openrouter.ai/keys" target="_blank" rel="noopener" className="text-accent hover:underline">openrouter.ai/keys</a>
-                {' '}— isi saldo minimal $1 untuk mulai.
+                {' '}— semua model di bawah butuh saldo OpenRouter.
               </p>
             </div>
 
@@ -118,8 +119,8 @@ export default function SettingsModal({ onClose, apiKey: initialKey, model: init
                   </option>
                 ))}
               </select>
-              <p className="text-[8px] text-slate-600">
-                Rekomendasi: Gemini Flash 1.5 (paling cepat & murah). Gunakan model lebih besar untuk analisis lebih dalam.
+              <p className="text-[8px] text-warning font-bold">
+                ⚠️ Semua model berbayar. Pastikan saldo OpenRouter cukup sebelum digunakan.
               </p>
             </div>
           </div>
