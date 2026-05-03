@@ -83,3 +83,19 @@
 .text-glow {
   text-shadow: 0 0 20px rgba(0, 255, 136, 0.4);
 }
+
+/* ── Mobile Bottom Navigation ─────────────────────────────── */
+.mobile-nav {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  z-index: 90;
+}
+
+@media (min-width: 1024px) {
+  .mobile-nav {
+    display: none !important;
+  }
+}

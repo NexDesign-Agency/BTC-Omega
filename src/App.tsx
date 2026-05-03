@@ -458,7 +458,7 @@ export default function App() {
       </header>
 
       {/* Main Dashboard Layout */}
-      <main className="flex-1 flex flex-col overflow-hidden relative">
+      <main className="flex-1 flex flex-col overflow-hidden relative pb-16 lg:pb-0">
 
         {/* ── TF Indicator Strip + Session Badge ──────────────── */}
         <div className="h-[52px] border-b border-trading-border flex items-stretch bg-trading-panel/30 flex-shrink-0 overflow-x-auto no-scrollbar">
@@ -586,7 +586,7 @@ export default function App() {
           {/* Right: AI Analysis Panel */}
           <div className={`
               ${mobileActiveTab === 'SIGNAL' ? 'col-span-12 flex' : 'hidden'} 
-              lg:flex lg:col-span-4 flex-col bg-trading-panel overflow-y-auto no-scrollbar h-full w-full pb-20 lg:pb-0
+              lg:flex lg:col-span-4 flex-col bg-trading-panel overflow-y-auto no-scrollbar h-full w-full
             `}>
             
             {/* ── CARD 1: PRIMARY ENTRY ─────────────────────────────── */}
@@ -823,7 +823,7 @@ export default function App() {
         </div>
 
         {/* Bottom Navigation for Mobile */}
-        <nav className="h-16 bg-trading-panel border-t border-trading-border lg:hidden flex items-center justify-around px-4 z-[90] shadow-[0_-5px_15px_rgba(0,0,0,0.5)] flex-shrink-0">
+        <nav className="h-16 bg-trading-panel border-t border-trading-border mobile-nav items-center justify-around px-4 shadow-[0_-5px_15px_rgba(0,0,0,0.5)]">
           {[
             { id: 'SIGNAL', label: 'SIGNALS', icon: <Zap size={20} className={mobileActiveTab === 'SIGNAL' ? 'text-bull' : 'text-slate-500'} /> },
             { id: 'CHART', label: 'CHART', icon: <TrendingUp size={20} className={mobileActiveTab === 'CHART' ? 'text-bull' : 'text-slate-500'} /> },
@@ -856,6 +856,30 @@ export default function App() {
           <p className="text-[7px] md:text-[8px] text-slate-600 font-mono tracking-widest uppercase">&copy; 2026 OMEGA INTEL. NOT FINANCIAL ADVICE</p>
         </footer>
       </main>
+
+      {/* Bottom Navigation for Mobile */}
+      <nav className="h-16 bg-trading-panel border-t border-trading-border mobile-nav items-center justify-around px-4 shadow-[0_-5px_15px_rgba(0,0,0,0.5)]" style={{ position: 'fixed', bottom: 0, left: 0, width: '100%', zIndex: 90 }}>
+        {[
+          { id: 'SIGNAL', label: 'SIGNALS', icon: <Zap size={20} className={mobileActiveTab === 'SIGNAL' ? 'text-bull' : 'text-slate-500'} /> },
+          { id: 'CHART', label: 'CHART', icon: <TrendingUp size={20} className={mobileActiveTab === 'CHART' ? 'text-bull' : 'text-slate-500'} /> },
+          { id: 'CHAT', label: 'AI CHAT', icon: <Bot size={20} className={mobileActiveTab === 'CHAT' ? 'text-bull' : 'text-slate-500'} /> }
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setMobileActiveTab(tab.id as 'CHART' | 'SIGNAL' | 'CHAT')}
+            className={`flex flex-col items-center gap-1.5 w-16 transition-all duration-300
+              ${mobileActiveTab === tab.id ? 'scale-110' : 'scale-100 hover:scale-105'}
+            `}
+          >
+            <div className={`p-1 rounded-md transition-colors ${mobileActiveTab === tab.id ? 'bg-accent/10 border border-accent/20' : ''}`}>
+              {tab.icon}
+            </div>
+            <span className={`text-[9px] font-bold tracking-widest ${mobileActiveTab === tab.id ? 'text-bull' : 'text-slate-500'}`}>
+              {tab.label}
+            </span>
+          </button>
+        ))}
+      </nav>
 
       {/* Slide-out History Panel */}
       <AnimatePresence>
